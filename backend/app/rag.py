@@ -76,6 +76,18 @@ async def ingest_document(path: Path) -> int:
     return added
 
 
+def list_indexed_documents() -> list[dict]:
+    collection = _collection()
+    if collection.count() == 0:
+        return []
+    rows = collection.get(include=["metadatas"])
+    documents: dict[str, int] = {}
+    for metadata in rows.get("metadatas") or []:
+        name = metadata.get("document", "Unknown")
+        documents[name] = documents.get(name, 0) + 1
+    return [{"document": name, "chunks": chunks} for name, chunks in sorted(documents.items())]
+
+
 async def retrieve(message: str, top_k: int | None = None) -> tuple[list[str], list[Source], float]:
     settings = get_settings()
     collection = _collection()
@@ -94,19 +106,17 @@ async def retrieve(message: str, top_k: int | None = None) -> tuple[list[str], l
 
     contexts: list[str] = []
     sources: list[Source] = []
-    best_confidence = 0.0
     for doc, metadata, distance in zip(docs, metadatas, distances, strict=False):
-        confidence = max(0.0, min(1.0, 1.0 - float(distance or 0)))
-        best_confidence = max(best_confidence, confidence)
-        if distance is not None and distance > 1.25:
-            continue
         contexts.append(doc)
         sources.append(
             Source(
                 title=f"{metadata.get('document')} page {metadata.get('page')}",
                 document=metadata.get("document"),
                 page=metadata.get("page"),
-                snippet=doc[:240],
+                snippet=f"Distance: {distance}. {doc[:220]}",
             )
         )
-    return contexts, sources, best_confidence
+    # Chroma distance scales vary by embedding function and metric. For routing,
+    # top-k presence is a better signal than a brittle universal cutoff.
+    retrieval_confidence = 0.72 if contexts else 0.0
+    return contexts, sources, retrieval_confidence

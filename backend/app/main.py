@@ -10,7 +10,7 @@ from app import db
 from app.db import get_messages, list_sessions, save_message
 from app.ollama_client import OllamaUnavailableError, check_ollama, stream_chat
 from app.prompts import build_messages
-from app.rag import ingest_document, retrieve
+from app.rag import ingest_document, list_indexed_documents, retrieve
 from app.agent_graph import choose_route_with_graph
 from app.schemas import ChatStreamRequest
 from app.web_search import web_search
@@ -54,6 +54,11 @@ def sessions():
 @app.get("/sessions/{session_id}/messages")
 def messages(session_id: str):
     return get_messages(session_id, limit=100)
+
+
+@app.get("/documents")
+def documents():
+    return list_indexed_documents()
 
 
 @app.post("/documents/upload")
