@@ -2,15 +2,15 @@ import json
 from pathlib import Path
 from typing import AsyncIterator
 
-from fastapi import FastAPI, File, HTTPException, UploadFile
+from fastapi import FastAPI, File, Form, HTTPException, Query, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 
 from app import db
-from app.db import get_messages, list_sessions, save_message
+from app.db import delete_session, get_messages, list_sessions, save_message
 from app.ollama_client import OllamaUnavailableError, check_ollama, stream_chat
 from app.prompts import build_messages
-from app.rag import ingest_document, list_indexed_documents, retrieve
+from app.rag import clear_documents, clear_legacy_documents, delete_document, ingest_document, list_indexed_documents, retrieve
 from app.agent_graph import choose_route_with_graph
 from app.schemas import ChatStreamRequest
 from app.web_search import web_search
@@ -30,6 +30,7 @@ app.add_middleware(
 def startup() -> None:
     db.init_db()
     Path("./data/uploads").mkdir(parents=True, exist_ok=True)
+    clear_legacy_documents()
 
 
 def sse(event: str, data) -> str:
@@ -56,20 +57,42 @@ def messages(session_id: str):
     return get_messages(session_id, limit=100)
 
 
+@app.delete("/sessions/{session_id}")
+def remove_session(session_id: str):
+    delete_session(session_id)
+    return {"deleted": session_id}
+
+
 @app.get("/documents")
-def documents():
-    return list_indexed_documents()
+def documents(session_id: str | None = Query(default=None)):
+    return list_indexed_documents(session_id)
+
+
+@app.delete("/documents")
+def remove_all_documents(session_id: str | None = Query(default=None)):
+    deleted_chunks = clear_documents(session_id)
+    return {"deleted_chunks": deleted_chunks}
+
+
+@app.delete("/documents/{document_name}")
+def remove_document(document_name: str, session_id: str | None = Query(default=None)):
+    deleted_chunks = delete_document(document_name, session_id)
+    return {"document": document_name, "deleted_chunks": deleted_chunks}
 
 
 @app.post("/documents/upload")
-async def upload_document(file: UploadFile = File(...)):
+async def upload_document(session_id: str = Form(...), file: UploadFile = File(...)):
     suffix = Path(file.filename or "").suffix.lower()
     if suffix not in {".pdf", ".txt", ".md"}:
         raise HTTPException(status_code=400, detail="Only PDF, TXT, and MD files are supported.")
 
-    upload_path = Path("./data/uploads") / Path(file.filename or "document").name
-    upload_path.write_bytes(await file.read())
-    chunks = await ingest_document(upload_path)
+    upload_dir = Path("./data/uploads") / session_id
+    upload_dir.mkdir(parents=True, exist_ok=True)
+    upload_path = upload_dir / Path(file.filename or "document").name
+    content = await file.read()
+    delete_document(upload_path.name, session_id)
+    upload_path.write_bytes(content)
+    chunks = await ingest_document(upload_path, session_id)
     return {"filename": upload_path.name, "chunks": chunks}
 
 
@@ -82,7 +105,7 @@ async def chat_stream(payload: ChatStreamRequest):
             history = get_messages(payload.session_id)
 
             yield sse("status", {"message": "Searching documents..."})
-            contexts, rag_sources, retrieval_confidence = await retrieve(payload.message)
+            contexts, rag_sources, retrieval_confidence = await retrieve(payload.message, payload.session_id)
             route_state = choose_route_with_graph(
                 payload.message,
                 payload.web_search_mode,
@@ -92,7 +115,7 @@ async def chat_stream(payload: ChatStreamRequest):
 
             context: list[str] | str | None = contexts
             sources = rag_sources
-            if route == "HYBRID_RAG_WEB":
+            if route == "RAG_WEB":
                 yield sse("status", {"message": "Searching web and documents..."})
                 web_context, web_sources = await web_search(payload.message)
                 context = [

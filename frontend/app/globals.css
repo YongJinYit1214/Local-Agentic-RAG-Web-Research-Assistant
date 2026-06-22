@@ -91,7 +91,7 @@ textarea {
 
 .session {
   display: grid;
-  grid-template-columns: 18px minmax(0, 1fr);
+  grid-template-columns: minmax(0, 1fr) 30px;
   align-items: center;
   gap: 8px;
   min-height: 38px;
@@ -102,10 +102,40 @@ textarea {
   text-align: left;
 }
 
-.session span {
+.session-main {
+  display: grid;
+  grid-template-columns: 18px minmax(0, 1fr);
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+  padding: 0;
+  text-align: left;
+}
+
+.session-main span {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.session-delete {
+  display: grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: #dfe6ec;
+  cursor: pointer;
+}
+
+.session-delete:hover {
+  background: #475761;
 }
 
 .session.active,
@@ -232,11 +262,41 @@ textarea {
 }
 
 .document-strip span {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
   border: 1px solid #cbd7d9;
   border-radius: 8px;
   background: #eef7f8;
   color: #1c5c64;
   padding: 6px 9px;
+  font-size: 13px;
+}
+
+.document-strip button {
+  display: grid;
+  place-items: center;
+  width: 22px;
+  height: 22px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: #1c5c64;
+  cursor: pointer;
+}
+
+.document-strip button:hover {
+  background: #d6ecef;
+}
+
+.document-strip .clear-docs {
+  width: auto;
+  min-height: 30px;
+  border: 1px solid #cbd7d9;
+  border-radius: 8px;
+  background: #fff;
+  color: #1c5c64;
+  padding: 0 10px;
   font-size: 13px;
 }
 

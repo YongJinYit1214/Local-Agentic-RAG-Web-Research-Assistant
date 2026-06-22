@@ -25,9 +25,9 @@ def build_messages(
     context_text = "\n\n".join(context) if isinstance(context, list) else context or ""
     route_instruction = {
         "CHAT": "Use the chat history and answer normally.",
-        "RAG": "Use the document context as the primary evidence and cite source numbers.",
+        "RAG": "Use the hybrid RAG document context as the primary evidence and cite source numbers.",
         "WEB_SEARCH": "Use the web search snippets as the primary evidence and cite source numbers.",
-        "HYBRID_RAG_WEB": "Compare and synthesize document context with web search snippets. Be explicit about which claims come from uploaded documents and which come from online results.",
+        "RAG_WEB": "Compare and synthesize document context with web search snippets. Be explicit about which claims come from uploaded documents and which come from online results.",
     }[route]
 
     messages: list[dict[str, str]] = [{"role": "system", "content": SYSTEM_PROMPT}]

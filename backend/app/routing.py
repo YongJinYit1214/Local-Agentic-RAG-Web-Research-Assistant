@@ -6,7 +6,7 @@ class Route(StrEnum):
     CHAT = "CHAT"
     RAG = "RAG"
     WEB_SEARCH = "WEB_SEARCH"
-    HYBRID_RAG_WEB = "HYBRID_RAG_WEB"
+    RAG_WEB = "RAG_WEB"
 
 
 class RouteDecision(BaseModel):
@@ -130,13 +130,13 @@ def analyze_route(
     scores = {
         Route.WEB_SEARCH: max(0.0, web_score),
         Route.RAG: max(0.0, rag_score),
-        Route.HYBRID_RAG_WEB: max(0.0, hybrid_score),
+        Route.RAG_WEB: max(0.0, hybrid_score),
         Route.CHAT: max(0.0, chat_score),
     }
     route = max(scores, key=scores.get)
     confidence = min(0.99, max(scores.values()))
 
-    if route == Route.HYBRID_RAG_WEB:
+    if route == Route.RAG_WEB:
         rationale = "The request needs both uploaded-document grounding and fresh external context."
     elif route == Route.WEB_SEARCH:
         rationale = "The request needs external or fresh information, or Web Search Mode is enabled."

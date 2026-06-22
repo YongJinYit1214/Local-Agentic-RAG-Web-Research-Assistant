@@ -95,3 +95,9 @@ def get_messages(session_id: str, limit: int = 20) -> list[dict]:
             (session_id, limit),
         ).fetchall()
         return [dict(row) for row in reversed(rows)]
+
+
+def delete_session(session_id: str) -> None:
+    with connect() as conn:
+        conn.execute("DELETE FROM messages WHERE session_id = ?", (session_id,))
+        conn.execute("DELETE FROM sessions WHERE session_id = ?", (session_id,))

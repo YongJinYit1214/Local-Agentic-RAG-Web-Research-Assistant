@@ -1,7 +1,7 @@
 "use client";
 
 import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
-import { FileText, Globe2, MessageSquare, Plus, Send, Upload } from "lucide-react";
+import { FileText, Globe2, MessageSquare, Plus, Send, Trash2, Upload } from "lucide-react";
 
 type ChatMessage = {
   role: "user" | "assistant";
@@ -23,6 +23,11 @@ type Session = {
   updated_at: string;
 };
 
+type IndexedDocument = {
+  document: string;
+  chunks: number;
+};
+
 const API_BASE = process.env.NEXT_PUBLIC_API_BASE ?? "http://localhost:8000";
 
 function newSessionId() {
@@ -38,7 +43,7 @@ export default function Home() {
   const [status, setStatus] = useState("Ready");
   const [apiOnline, setApiOnline] = useState<boolean | null>(null);
   const [isStreaming, setIsStreaming] = useState(false);
-  const [documents, setDocuments] = useState<string[]>([]);
+  const [documents, setDocuments] = useState<IndexedDocument[]>([]);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const bottomRef = useRef<HTMLDivElement | null>(null);
 
@@ -55,11 +60,9 @@ export default function Home() {
         setStatus(`FastAPI is not reachable at ${API_BASE}`);
       });
 
-    fetch(`${API_BASE}/sessions`)
-      .then((response) => response.json())
-      .then(setSessions)
-      .catch(() => setSessions([]));
-  }, []);
+    refreshSessions();
+    refreshDocuments(sessionId);
+  }, [sessionId]);
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
@@ -71,17 +74,52 @@ export default function Home() {
     const response = await fetch(`${API_BASE}/sessions/${id}/messages`);
     const rows = await response.json();
     setMessages(rows.map((row: ChatMessage) => ({ role: row.role, content: row.content })));
+    await refreshDocuments(id);
     setStatus("Ready");
   }
 
   function startNewChat() {
     setSessionId(newSessionId());
     setMessages([]);
+    setDocuments([]);
     setStatus("Ready");
+  }
+
+  async function refreshSessions() {
+    fetch(`${API_BASE}/sessions`)
+      .then((response) => response.json())
+      .then(setSessions)
+      .catch(() => setSessions([]));
+  }
+
+  async function refreshDocuments(id = sessionId) {
+    fetch(`${API_BASE}/documents?session_id=${encodeURIComponent(id)}`)
+      .then((response) => response.json())
+      .then(setDocuments)
+      .catch(() => setDocuments([]));
+  }
+
+  async function deleteSession(id: string) {
+    await fetch(`${API_BASE}/sessions/${encodeURIComponent(id)}`, { method: "DELETE" });
+    setSessions((current) => current.filter((session) => session.session_id !== id));
+    if (id === sessionId) startNewChat();
+  }
+
+  async function deleteDocument(documentName: string) {
+    await fetch(`${API_BASE}/documents/${encodeURIComponent(documentName)}?session_id=${encodeURIComponent(sessionId)}`, { method: "DELETE" });
+    setDocuments((current) => current.filter((document) => document.document !== documentName));
+    setStatus("Document deleted");
+  }
+
+  async function clearDocuments() {
+    await fetch(`${API_BASE}/documents?session_id=${encodeURIComponent(sessionId)}`, { method: "DELETE" });
+    setDocuments([]);
+    setStatus("Documents cleared");
   }
 
   async function uploadDocument(file: File) {
     const formData = new FormData();
+    formData.append("session_id", sessionId);
     formData.append("file", file);
     setStatus("Uploading document...");
     const response = await fetch(`${API_BASE}/documents/upload`, {
@@ -93,7 +131,10 @@ export default function Home() {
       return;
     }
     const result = await response.json();
-    setDocuments((current) => [...current, `${result.filename} (${result.chunks} chunks)`]);
+    setDocuments((current) => [
+      ...current.filter((document) => document.document !== result.filename),
+      { document: result.filename, chunks: result.chunks }
+    ]);
     setStatus("Document indexed");
   }
 
@@ -201,14 +242,23 @@ export default function Home() {
         </button>
         <div className="session-list">
           {orderedSessions.map((session) => (
-            <button
+            <div
               key={session.session_id}
               className={session.session_id === sessionId ? "session active" : "session"}
-              onClick={() => loadSession(session.session_id)}
             >
-              <MessageSquare size={15} />
-              <span>{session.title}</span>
-            </button>
+              <button className="session-main" onClick={() => loadSession(session.session_id)}>
+                <MessageSquare size={15} />
+                <span>{session.title}</span>
+              </button>
+              <button
+                className="session-delete"
+                onClick={() => deleteSession(session.session_id)}
+                title="Delete chat"
+                type="button"
+              >
+                <Trash2 size={14} />
+              </button>
+            </div>
           ))}
         </div>
       </aside>
@@ -269,8 +319,18 @@ export default function Home() {
 
         <div className="document-strip">
           {documents.map((document) => (
-            <span key={document}>{document}</span>
+            <span key={document.document}>
+              {document.document} ({document.chunks} chunks)
+              <button type="button" onClick={() => deleteDocument(document.document)} title="Delete document">
+                <Trash2 size={13} />
+              </button>
+            </span>
           ))}
+          {documents.length > 0 && (
+            <button type="button" className="clear-docs" onClick={clearDocuments}>
+              Clear docs
+            </button>
+          )}
         </div>
 
         <form className="composer" onSubmit={sendMessage}>
