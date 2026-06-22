@@ -626,30 +626,3 @@ http://localhost:8000/documents?session_id=YOUR_SESSION_ID
 ### Uploading the same file twice
 
 The backend deletes old chunks for the same filename in the same session before re-indexing the new copy.
-
-## Why This Matches The Full-Stack AI Engineer JD
-
-This project demonstrates:
-
-- Next.js frontend development
-- FastAPI backend development
-- local LLM integration
-- Ollama streaming
-- RAG document indexing and retrieval
-- hybrid retrieval with semantic search and keyword search
-- agentic routing with LangGraph
-- deterministic tool selection
-- web search integration
-- SQLite chat memory
-- vector database usage
-- SSE streaming
-- session-aware state management
-- source citation display
-
-## Git Remote
-
-This local repository is linked to:
-
-```text
-https://github.com/YongJinYit1214/Local-Agentic-RAG-Web-Research-Assistant.git
-```
