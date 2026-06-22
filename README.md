@@ -22,7 +22,7 @@ A local agentic RAG web research assistant built with Next.js, FastAPI, Ollama, 
 | Embedding | `nomic-embed-text` via Ollama |
 | Vector DB | ChromaDB |
 | Chat DB | SQLite |
-| Web Search | DuckDuckGo Search |
+| Web Search | Tavily or Brave Search, DuckDuckGo fallback |
 | Agent Flow | LangGraph deterministic router |
 
 ## Prerequisites
@@ -45,6 +45,25 @@ Invoke-RestMethod http://127.0.0.1:11434/api/tags
 ```
 
 If the app says `All connection attempts failed`, FastAPI is usually running but Ollama is not. Start Ollama first, then restart the backend.
+
+## Web Search Setup
+
+DuckDuckGo does not need a token, but it is not consistent because it uses public search endpoints that can rate-limit. For a reliable demo, configure a real search API key.
+
+Recommended:
+
+- Tavily: set `TAVILY_API_KEY`
+- Brave Search API: set `BRAVE_API_KEY`
+
+Example `backend/.env`:
+
+```env
+SEARCH_PROVIDER=auto
+TAVILY_API_KEY=your_tavily_key
+BRAVE_API_KEY=
+```
+
+`SEARCH_PROVIDER=auto` tries Tavily first, then Brave Search, then DuckDuckGo. You can force one provider with `SEARCH_PROVIDER=tavily`, `SEARCH_PROVIDER=brave`, or `SEARCH_PROVIDER=duckduckgo`.
 
 ## Quick Start
 

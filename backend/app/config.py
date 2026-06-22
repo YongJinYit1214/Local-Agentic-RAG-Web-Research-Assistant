@@ -11,6 +11,9 @@ class Settings(BaseSettings):
     chroma_path: str = "./chroma"
     rag_top_k: int = 5
     web_top_k: int = 5
+    search_provider: str = "auto"
+    tavily_api_key: str = ""
+    brave_api_key: str = ""
 
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8")
 

@@ -161,7 +161,17 @@ export default function Home() {
               return next;
             });
           }
-          if (eventName === "error") setStatus(data.message);
+          if (eventName === "error") {
+            setStatus(data.message);
+            setMessages((current) => {
+              const next = [...current];
+              const last = next[next.length - 1];
+              if (last?.role === "assistant" && !last.content) {
+                next[next.length - 1] = { ...last, content: data.message };
+              }
+              return next;
+            });
+          }
           if (eventName === "done") setStatus("Ready");
         }
       }
