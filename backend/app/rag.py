@@ -76,11 +76,11 @@ async def ingest_document(path: Path) -> int:
     return added
 
 
-async def retrieve(message: str, top_k: int | None = None) -> tuple[list[str], list[Source]]:
+async def retrieve(message: str, top_k: int | None = None) -> tuple[list[str], list[Source], float]:
     settings = get_settings()
     collection = _collection()
     if collection.count() == 0:
-        return [], []
+        return [], [], 0
 
     vector = await embed(message)
     results = collection.query(
@@ -94,7 +94,10 @@ async def retrieve(message: str, top_k: int | None = None) -> tuple[list[str], l
 
     contexts: list[str] = []
     sources: list[Source] = []
+    best_confidence = 0.0
     for doc, metadata, distance in zip(docs, metadatas, distances, strict=False):
+        confidence = max(0.0, min(1.0, 1.0 - float(distance or 0)))
+        best_confidence = max(best_confidence, confidence)
         if distance is not None and distance > 1.25:
             continue
         contexts.append(doc)
@@ -106,4 +109,4 @@ async def retrieve(message: str, top_k: int | None = None) -> tuple[list[str], l
                 snippet=doc[:240],
             )
         )
-    return contexts, sources
+    return contexts, sources, best_confidence

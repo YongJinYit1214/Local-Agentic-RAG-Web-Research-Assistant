@@ -8,7 +8,7 @@ from fastapi.responses import StreamingResponse
 
 from app import db
 from app.db import get_messages, list_sessions, save_message
-from app.ollama_client import stream_chat
+from app.ollama_client import OllamaUnavailableError, check_ollama, stream_chat
 from app.prompts import build_messages
 from app.rag import ingest_document, retrieve
 from app.agent_graph import choose_route_with_graph
@@ -39,6 +39,11 @@ def sse(event: str, data) -> str:
 @app.get("/health")
 def health() -> dict[str, str]:
     return {"status": "ok"}
+
+
+@app.get("/health/ollama")
+async def ollama_health():
+    return await check_ollama()
 
 
 @app.get("/sessions")
@@ -72,12 +77,27 @@ async def chat_stream(payload: ChatStreamRequest):
             history = get_messages(payload.session_id)
 
             yield sse("status", {"message": "Searching documents..."})
-            contexts, rag_sources = await retrieve(payload.message)
-            route = choose_route_with_graph(payload.message, payload.web_search_mode, bool(contexts))
+            contexts, rag_sources, retrieval_confidence = await retrieve(payload.message)
+            route_state = choose_route_with_graph(
+                payload.message,
+                payload.web_search_mode,
+                retrieval_confidence,
+            )
+            route = route_state["route"]
 
             context: list[str] | str | None = contexts
             sources = rag_sources
-            if route == "WEB_SEARCH":
+            if route == "HYBRID_RAG_WEB":
+                yield sse("status", {"message": "Searching web and documents..."})
+                web_context, web_sources = await web_search(payload.message)
+                context = [
+                    "Uploaded document context:",
+                    *contexts,
+                    "Web search context:",
+                    web_context,
+                ]
+                sources = [*rag_sources, *web_sources]
+            elif route == "WEB_SEARCH":
                 yield sse("status", {"message": "Searching web..."})
                 context, sources = await web_search(payload.message)
             elif route == "RAG":
@@ -85,7 +105,15 @@ async def chat_stream(payload: ChatStreamRequest):
             else:
                 yield sse("status", {"message": "Generating answer..."})
 
-            yield sse("route", {"route": route})
+            yield sse(
+                "route",
+                {
+                    "route": route,
+                    "confidence": route_state["confidence"],
+                    "rationale": route_state["rationale"],
+                    "signals": route_state["signals"],
+                },
+            )
             messages_for_llm = build_messages(
                 payload.message,
                 history,
@@ -101,6 +129,8 @@ async def chat_stream(payload: ChatStreamRequest):
             save_message(payload.session_id, "assistant", assistant_text)
             yield sse("sources", {"sources": [source.model_dump() for source in sources]})
             yield sse("done", {"message": "complete"})
+        except OllamaUnavailableError as exc:
+            yield sse("error", {"message": str(exc)})
         except Exception as exc:
             yield sse("error", {"message": str(exc)})
 

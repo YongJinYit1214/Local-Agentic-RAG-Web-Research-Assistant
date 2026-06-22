@@ -27,6 +27,7 @@ def build_messages(
         "CHAT": "Use the chat history and answer normally.",
         "RAG": "Use the document context as the primary evidence and cite source numbers.",
         "WEB_SEARCH": "Use the web search snippets as the primary evidence and cite source numbers.",
+        "HYBRID_RAG_WEB": "Compare and synthesize document context with web search snippets. Be explicit about which claims come from uploaded documents and which come from online results.",
     }[route]
 
     messages: list[dict[str, str]] = [{"role": "system", "content": SYSTEM_PROMPT}]

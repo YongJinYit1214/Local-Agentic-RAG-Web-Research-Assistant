@@ -36,6 +36,7 @@ export default function Home() {
   const [input, setInput] = useState("");
   const [webSearchMode, setWebSearchMode] = useState(false);
   const [status, setStatus] = useState("Ready");
+  const [apiOnline, setApiOnline] = useState<boolean | null>(null);
   const [isStreaming, setIsStreaming] = useState(false);
   const [documents, setDocuments] = useState<string[]>([]);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
@@ -44,6 +45,16 @@ export default function Home() {
   const canSend = input.trim().length > 0 && !isStreaming;
 
   useEffect(() => {
+    fetch(`${API_BASE}/health`)
+      .then((response) => {
+        setApiOnline(response.ok);
+        if (!response.ok) setStatus(`FastAPI is not reachable at ${API_BASE}`);
+      })
+      .catch(() => {
+        setApiOnline(false);
+        setStatus(`FastAPI is not reachable at ${API_BASE}`);
+      });
+
     fetch(`${API_BASE}/sessions`)
       .then((response) => response.json())
       .then(setSessions)
@@ -131,7 +142,9 @@ export default function Home() {
           const data = JSON.parse(dataLine.replace("data:", "").trim());
 
           if (eventName === "status") setStatus(data.message);
-          if (eventName === "route") setStatus(`Route: ${data.route}`);
+          if (eventName === "route") {
+            setStatus(`Route: ${data.route} (${Math.round(data.confidence * 100)}%) - ${data.rationale}`);
+          }
           if (eventName === "token") {
             setMessages((current) => {
               const next = [...current];
@@ -153,7 +166,8 @@ export default function Home() {
         }
       }
     } catch (error) {
-      setStatus(error instanceof Error ? error.message : "Request failed");
+      const message = error instanceof Error ? error.message : "Request failed";
+      setStatus(`${message}. Check that FastAPI is running at ${API_BASE}`);
     } finally {
       setIsStreaming(false);
     }
@@ -193,7 +207,10 @@ export default function Home() {
         <header className="topbar">
           <div>
             <h2>Streaming Chat</h2>
-            <p>{status}</p>
+            <p>
+              {apiOnline === false ? "API offline - " : ""}
+              {status}
+            </p>
           </div>
           <label className="toggle">
             <input
