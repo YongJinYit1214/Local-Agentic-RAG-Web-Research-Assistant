@@ -18,11 +18,11 @@ A local agentic RAG web research assistant built with Next.js, FastAPI, Ollama, 
 | Frontend | Next.js + TypeScript |
 | Backend | FastAPI |
 | Local LLM | Ollama |
-| Suggested models | `llama3.1:8b`, `qwen2.5:7b`, `mistral:7b` |
+| Suggested models | `llama3.1:8b` |
 | Embedding | `nomic-embed-text` via Ollama |
 | Vector DB | ChromaDB |
 | Chat DB | SQLite |
-| Web Search | Tavily or Brave Search, DuckDuckGo fallback |
+| Web Search | Tavily|
 | Agent Flow | LangGraph deterministic router |
 
 ## Prerequisites
