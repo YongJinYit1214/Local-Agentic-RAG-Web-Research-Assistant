@@ -1,7 +1,7 @@
 "use client";
 
 import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
-import { Database, FileText, Globe2, MessageSquare, Plus, Send, Trash2, Upload } from "lucide-react";
+import { FileText, Globe2, MessageSquare, Plus, Send, Trash2, Upload } from "lucide-react";
 
 type ChatMessage = {
   role: "user" | "assistant";
@@ -115,26 +115,6 @@ export default function Home() {
     await fetch(`${API_BASE}/documents?session_id=${encodeURIComponent(sessionId)}`, { method: "DELETE" });
     setDocuments([]);
     setStatus("Documents cleared");
-  }
-
-  async function loadSeedDocuments() {
-    const formData = new FormData();
-    formData.append("session_id", sessionId);
-    setStatus("Loading seed PDFs...");
-    const response = await fetch(`${API_BASE}/documents/seed`, {
-      method: "POST",
-      body: formData
-    });
-    if (!response.ok) {
-      setStatus("Seed PDF load failed");
-      return;
-    }
-    const result = await response.json();
-    setDocuments(result.documents.map((document: { filename: string; chunks: number }) => ({
-      document: document.filename,
-      chunks: document.chunks
-    })));
-    setStatus("Seed PDFs loaded");
   }
 
   async function uploadDocument(file: File) {
@@ -307,7 +287,7 @@ export default function Home() {
           {messages.length === 0 && (
             <div className="empty-state">
               <h3>Ask only from seeded or uploaded PDFs.</h3>
-              <p>Load the seed PDFs or upload a document. Use Web Search only when online evidence is needed.</p>
+              <p>Seed PDFs are loaded automatically for each chat. Use Web Search only when online evidence is needed.</p>
             </div>
           )}
 
@@ -338,10 +318,6 @@ export default function Home() {
         </div>
 
         <div className="document-strip">
-          <button type="button" className="clear-docs" onClick={loadSeedDocuments}>
-            <Database size={13} />
-            Load seeds
-          </button>
           {documents.map((document) => (
             <span key={document.document}>
               {document.document} ({document.chunks} chunks)

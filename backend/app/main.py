@@ -10,7 +10,7 @@ from app import db
 from app.db import delete_session, get_messages, list_sessions, save_message
 from app.ollama_client import OllamaUnavailableError, check_ollama, stream_chat
 from app.prompts import build_messages
-from app.rag import clear_documents, clear_legacy_documents, delete_document, ingest_document, list_indexed_documents, retrieve
+from app.rag import clear_documents, clear_legacy_documents, delete_document, has_document, ingest_document, list_indexed_documents, retrieve
 from app.agent_graph import choose_route_with_graph
 from app.schemas import ChatStreamRequest
 from app.web_search import web_search
@@ -36,6 +36,23 @@ def startup() -> None:
 
 def sse(event: str, data) -> str:
     return f"event: {event}\ndata: {json.dumps(data, ensure_ascii=False)}\n\n"
+
+
+async def ensure_seed_documents(session_id: str) -> list[dict]:
+    seed_dir = Path("./seeds/pdfs")
+    loaded: list[dict] = []
+    if not seed_dir.exists():
+        return loaded
+
+    upload_dir = Path("./data/uploads") / session_id
+    upload_dir.mkdir(parents=True, exist_ok=True)
+
+    for seed_path in sorted(seed_dir.glob("*.pdf")):
+        if has_document(seed_path.name, session_id):
+            continue
+        chunks = await ingest_document(seed_path, session_id, source_type="seed")
+        loaded.append({"filename": seed_path.name, "chunks": chunks})
+    return loaded
 
 
 @app.get("/health")
@@ -65,7 +82,9 @@ def remove_session(session_id: str):
 
 
 @app.get("/documents")
-def documents(session_id: str | None = Query(default=None)):
+async def documents(session_id: str | None = Query(default=None)):
+    if session_id:
+        await ensure_seed_documents(session_id)
     return list_indexed_documents(session_id)
 
 
@@ -93,27 +112,13 @@ async def upload_document(session_id: str = Form(...), file: UploadFile = File(.
     content = await file.read()
     delete_document(upload_path.name, session_id)
     upload_path.write_bytes(content)
-    chunks = await ingest_document(upload_path, session_id)
+    chunks = await ingest_document(upload_path, session_id, source_type="upload")
     return {"filename": upload_path.name, "chunks": chunks}
 
 
 @app.post("/documents/seed")
 async def load_seed_documents(session_id: str = Form(...)):
-    seed_dir = Path("./seeds/pdfs")
-    if not seed_dir.exists():
-        raise HTTPException(status_code=404, detail="Seed PDF directory was not found.")
-
-    loaded: list[dict] = []
-    upload_dir = Path("./data/uploads") / session_id
-    upload_dir.mkdir(parents=True, exist_ok=True)
-
-    for seed_path in sorted(seed_dir.glob("*.pdf")):
-        target_path = upload_dir / seed_path.name
-        delete_document(seed_path.name, session_id)
-        target_path.write_bytes(seed_path.read_bytes())
-        chunks = await ingest_document(target_path, session_id)
-        loaded.append({"filename": seed_path.name, "chunks": chunks})
-
+    loaded = await ensure_seed_documents(session_id)
     return {"documents": loaded}
 
 
@@ -125,6 +130,7 @@ async def chat_stream(payload: ChatStreamRequest):
             save_message(payload.session_id, "user", payload.message)
             history = get_messages(payload.session_id)
 
+            await ensure_seed_documents(payload.session_id)
             yield sse("status", {"message": "Searching documents..."})
             contexts, rag_sources, retrieval_confidence = await retrieve(payload.message, payload.session_id)
             route_state = choose_route_with_graph(
@@ -166,7 +172,7 @@ async def chat_stream(payload: ChatStreamRequest):
             if route == "CHAT":
                 assistant_text = (
                     "I can't answer that from the uploaded or seeded PDFs in this chat. "
-                    "Load the seed PDFs, upload a relevant PDF, or enable Web Search Mode if you want me to use online information."
+                    "Upload a relevant PDF or enable Web Search Mode if you want me to use online information."
                 )
                 yield sse("token", {"token": assistant_text})
                 save_message(payload.session_id, "assistant", assistant_text)

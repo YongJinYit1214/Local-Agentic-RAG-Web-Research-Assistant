@@ -132,7 +132,7 @@ Current seed PDFs:
 
 Each seed PDF has three pages of related content about AI internship requirements, hybrid RAG design, deterministic routing, grounded answering, and evaluation metrics.
 
-The frontend has a `Load seeds` button. When clicked, the backend loads these PDFs into the active chat session only.
+The backend automatically loads these PDFs into each active chat session. They are available to RAG, but the frontend does not show them in the uploaded document strip. The strip is reserved for user-uploaded files only.
 
 This gives a predictable demo:
 
@@ -140,13 +140,139 @@ This gives a predictable demo:
 New chat
   |
   v
-Load seeds
-  |
-  v
 Ask questions about the seeded PDFs
 ```
 
 If the question cannot be answered from the seeded or uploaded PDFs, EvidenceDocs refuses to answer unless web search is enabled or triggered.
+
+## Company-Controlled Seed Corpus
+
+The seed PDF pack is designed to be company-configurable.
+
+In a real company deployment, the company owns the seed corpus. That means the organization decides which PDFs EvidenceDocs should trust as the default knowledge base.
+
+Examples of company seed documents:
+
+- onboarding guides
+- internal policy manuals
+- product documentation
+- job descriptions
+- compliance guidelines
+- engineering standards
+- customer support playbooks
+- API documentation
+- HR benefits documents
+- security procedures
+
+This is useful because EvidenceDocs is not trying to be a general chatbot. It is designed to be a controlled document-grounded assistant.
+
+### Why Company-Controlled Seeds Matter
+
+The seed corpus gives the company control over:
+
+- what the assistant is allowed to know by default
+- which documents are considered trusted evidence
+- when the assistant should refuse to answer
+- what sources are cited in responses
+- how often the knowledge base is updated
+
+This makes the system safer than a generic assistant because answers are grounded in approved documents.
+
+### How To Replace The Seed Corpus
+
+To customize EvidenceDocs for another company or domain:
+
+1. Delete or archive the demo PDFs in:
+
+```text
+backend/seeds/pdfs
+```
+
+2. Add the company's own PDFs to the same folder.
+
+Example:
+
+```text
+backend/seeds/pdfs/company_onboarding_guide.pdf
+backend/seeds/pdfs/security_policy.pdf
+backend/seeds/pdfs/product_api_manual.pdf
+backend/seeds/pdfs/hr_benefits_handbook.pdf
+```
+
+3. Restart the backend.
+
+4. Start a new chat.
+
+5. EvidenceDocs automatically indexes the new company seed PDFs for that chat session.
+
+No frontend code change is required.
+
+### Important Behavior
+
+Seed PDFs are automatically available to RAG, but they are hidden from the visible uploaded-document strip in the UI.
+
+Reason:
+
+- Seed PDFs are the system's default company knowledge base.
+- The document strip is reserved for user-uploaded temporary documents.
+- This keeps the UI clean while still allowing the assistant to answer from company-approved sources.
+
+### Updating Seed PDFs
+
+If a company changes a seed PDF, restart the backend and start a new chat so the new session indexes the latest version.
+
+For existing sessions, clear documents or delete the old session if you want to force a fresh index.
+
+Recommended operational workflow:
+
+```text
+Update PDFs in backend/seeds/pdfs
+  |
+  v
+Restart backend
+  |
+  v
+Start a new chat
+  |
+  v
+Seeds are indexed automatically
+```
+
+### Governance Model
+
+EvidenceDocs separates knowledge into two layers:
+
+| Layer | Purpose | Visible In UI |
+| --- | --- | --- |
+| Seed PDFs | Company-approved default knowledge base | No |
+| Uploaded files | Temporary user-provided documents for the current chat | Yes |
+
+This makes the assistant suitable for demos where the system must answer from controlled sources but still allow the user to upload extra context.
+
+### Example Company Use Case
+
+Suppose a company wants an internal HR assistant.
+
+The company can place these files in `backend/seeds/pdfs`:
+
+```text
+employee_handbook.pdf
+leave_policy.pdf
+benefits_guide.pdf
+remote_work_policy.pdf
+```
+
+Then employees can ask:
+
+```text
+How many annual leave days do I get?
+```
+
+If the answer exists in the seed PDFs, EvidenceDocs answers with citations.
+
+If the answer does not exist, EvidenceDocs says it cannot answer from the available PDFs.
+
+If Web Search Mode is enabled, the assistant can use online information, but this is a deliberate user-controlled action.
 
 ## Hybrid RAG Retrieval
 
@@ -606,7 +732,9 @@ Supported file types:
 
 ### `POST /documents/seed`
 
-Loads the built-in seed PDF pack into the active chat session.
+Ensures the built-in seed PDF pack is loaded into the active chat session. The app normally calls this automatically through `GET /documents?session_id=...` and `/chat/stream`, so this endpoint is mostly useful for testing.
+
+Seed PDFs are hidden from the normal `GET /documents?session_id=...` response because that response is used by the frontend uploaded-document strip.
 
 Form fields:
 
@@ -629,7 +757,7 @@ Returns:
 
 ### `GET /documents?session_id=...`
 
-Lists indexed documents for one chat session.
+Lists user-uploaded indexed documents for one chat session. Seed PDFs are not shown here even though they are searchable by RAG.
 
 ### `DELETE /documents/{document_name}?session_id=...`
 

@@ -12,7 +12,7 @@ from app.ollama_client import embed
 from app.schemas import Source
 
 
-COLLECTION_NAME = "localmind_documents"
+COLLECTION_NAME = "evidencedocs_documents"
 RRF_K = 60
 PARENT_CHUNK_TOKENS = 1200
 CHILD_CHUNK_TOKENS = 420
@@ -88,7 +88,7 @@ def extract_pages(path: Path) -> list[tuple[int, str]]:
     return [(1, _clean_text(path.read_text(encoding="utf-8", errors="ignore")))]
 
 
-async def ingest_document(path: Path, session_id: str) -> int:
+async def ingest_document(path: Path, session_id: str, source_type: str = "upload") -> int:
     collection = _collection()
     added = 0
     for page, text in extract_pages(path):
@@ -106,6 +106,7 @@ async def ingest_document(path: Path, session_id: str) -> int:
                         "chunk": child_index,
                         "parent_text": parent_text,
                         "session_id": session_id,
+                        "source_type": source_type,
                     }
                 ],
             )
@@ -124,9 +125,19 @@ def list_indexed_documents(session_id: str | None = None) -> list[dict]:
     rows = collection.get(where=_where_session(session_id), include=["metadatas"])
     documents: dict[str, int] = {}
     for metadata in rows.get("metadatas") or []:
+        if metadata.get("source_type") == "seed":
+            continue
         name = metadata.get("document", "Unknown")
         documents[name] = documents.get(name, 0) + 1
     return [{"document": name, "chunks": chunks} for name, chunks in sorted(documents.items())]
+
+
+def has_document(document_name: str, session_id: str) -> bool:
+    collection = _collection()
+    if collection.count() == 0:
+        return False
+    rows = collection.get(where={"$and": [{"document": document_name}, {"session_id": session_id}]})
+    return bool(rows.get("ids", []))
 
 
 def delete_document(document_name: str, session_id: str | None = None) -> int:
