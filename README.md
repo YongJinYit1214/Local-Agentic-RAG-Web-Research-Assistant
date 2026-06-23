@@ -1,8 +1,8 @@
-# LocalMind
+# EvidenceDocs
 
-LocalMind is a local agentic hybrid RAG web research assistant built with Next.js, FastAPI, Ollama, ChromaDB, SQLite, Tavily, and LangGraph.
+EvidenceDocs is a seeded PDF RAG research assistant built with Next.js, FastAPI, Ollama, ChromaDB, SQLite, Tavily, and LangGraph.
 
-The goal is to demonstrate a full-stack AI assistant that can answer from uploaded documents, remember chat history, stream responses token-by-token, and use web search only when the system deterministically decides it is appropriate.
+The goal is to demonstrate a full-stack AI assistant that answers only from seeded or uploaded PDFs by default. If the active PDFs cannot answer a question, the assistant says it cannot answer from the available evidence. It uses web search only when Web Search Mode is enabled or the deterministic router detects an explicit/current web request.
 
 ## Core Capabilities
 
@@ -10,6 +10,7 @@ The goal is to demonstrate a full-stack AI assistant that can answer from upload
 - Token-by-token streaming from FastAPI to Next.js.
 - Session-based chat memory stored in SQLite.
 - Session-scoped uploaded documents.
+- Seed PDF pack for repeatable demos.
 - Hybrid RAG retrieval over uploaded documents.
 - Tavily web search for online/current information.
 - Deterministic LangGraph routing instead of letting the LLM randomly choose tools.
@@ -45,8 +46,10 @@ FastAPI /chat/stream
   |
   +--> Hybrid RAG retrieval for current session
   |       semantic search: ChromaDB + Ollama embeddings
-  |       keyword search: local BM25-style scoring
+  |       keyword search: BM25 with IDF
   |       merge: Reciprocal Rank Fusion
+  |       rerank: relevance scoring
+  |       confidence: RRF + rerank + coverage + diversity
   |
   +--> LangGraph deterministic router
   |       CHAT / RAG / WEB_SEARCH / RAG_WEB
@@ -98,7 +101,7 @@ Backend saves assistant response
 
 Uploaded documents are scoped to the active `session_id`.
 
-This is important because a user may upload different files in different chats. LocalMind should not answer a new chat using old documents from a previous chat.
+This is important because a user may upload different files in different chats. EvidenceDocs should not answer a new chat using old documents from a previous chat.
 
 Behavior:
 
@@ -113,9 +116,41 @@ Behavior:
 - `DELETE /documents?session_id=...` clears documents for that chat.
 - Legacy chunks without `session_id` are cleaned on backend startup.
 
+## Seed PDF Pack
+
+EvidenceDocs includes a seed PDF pack for repeatable demos. The seed PDFs are stored in:
+
+```text
+backend/seeds/pdfs
+```
+
+Current seed PDFs:
+
+- `ai_internship_requirements.pdf`
+- `hybrid_rag_design_notes.pdf`
+- `evaluation_rubric.pdf`
+
+Each seed PDF has three pages of related content about AI internship requirements, hybrid RAG design, deterministic routing, grounded answering, and evaluation metrics.
+
+The frontend has a `Load seeds` button. When clicked, the backend loads these PDFs into the active chat session only.
+
+This gives a predictable demo:
+
+```text
+New chat
+  |
+  v
+Load seeds
+  |
+  v
+Ask questions about the seeded PDFs
+```
+
+If the question cannot be answered from the seeded or uploaded PDFs, EvidenceDocs refuses to answer unless web search is enabled or triggered.
+
 ## Hybrid RAG Retrieval
 
-LocalMind uses hybrid RAG inside the `RAG` route.
+EvidenceDocs uses hybrid RAG inside the `RAG` route.
 
 Hybrid RAG here means:
 
@@ -127,16 +162,28 @@ It does not mean "RAG plus web search." RAG plus web search is handled by the se
 
 ### Step 1: Chunk Documents
 
-Uploaded PDFs, TXT, and Markdown files are extracted into text, cleaned, and split into overlapping chunks.
+Uploaded PDFs, TXT, and Markdown files are extracted into text, cleaned, and split using a parent-child chunking strategy.
 
 Current chunking method:
 
 ```text
-chunk size: 900 words
-overlap: 150 words
+parent chunk: 1200 tokens/words
+child chunk: 420 tokens/words
+child overlap: 80 tokens/words
 ```
 
-Each chunk is stored in ChromaDB with metadata.
+Retrieval searches child chunks because smaller chunks improve precision. Generation receives the larger parent chunk stored in metadata because parent context gives the LLM enough surrounding information to answer completely.
+
+Each child chunk is stored in ChromaDB with metadata:
+
+```text
+session_id
+document
+page
+parent
+chunk
+parent_text
+```
 
 ### Step 2: Semantic Search
 
@@ -165,12 +212,12 @@ Semantic search may find chunks about:
 
 ### Step 3: Keyword Search
 
-LocalMind also performs local keyword scoring over the same session-scoped chunks.
+EvidenceDocs also performs BM25 keyword retrieval over the same session-scoped chunks.
 
-The keyword search uses a simple BM25-style term-frequency formula:
+BM25 uses term frequency and inverse document frequency, so rare important terms are rewarded more strongly than common words.
 
 ```text
-score += tf / (tf + 1.5 + 0.75 * document_length / 120)
+BM25(query, chunk) = IDF(term) * term-frequency normalization
 ```
 
 This catches exact terms that semantic search can miss.
@@ -234,9 +281,51 @@ RRF: 0.0325; semantic rank: 2; keyword rank: 1
 
 This helps explain why a chunk was selected.
 
+### Step 6: Rerank Fused Candidates
+
+After RRF, EvidenceDocs reranks fused candidates before sending them to the LLM.
+
+Current reranker:
+
+```text
+deterministic heuristic reranker
+```
+
+It scores each candidate from 0 to 5 using:
+
+- query term coverage in the child chunk
+- query term coverage in the parent chunk
+- whether the chunk appeared in semantic results
+- whether the chunk appeared in BM25 results
+- a bonus when both semantic and BM25 agree
+
+The system keeps the best chunks after reranking. This is designed as a local-first demo reranker and can later be replaced by a cross-encoder or LLM judge.
+
+### Step 7: Retrieval Confidence
+
+Retrieval confidence is no longer based only on whether chunks exist.
+
+EvidenceDocs computes:
+
+```text
+retrieval_confidence =
+    0.4 * normalized_rrf_score
+  + 0.3 * reranker_score
+  + 0.2 * query_term_coverage
+  + 0.1 * source_diversity
+```
+
+Thresholds:
+
+```text
+confidence >= 0.75: strong document match
+0.45 - 0.75: weak/medium document match
+confidence < 0.45: no reliable document grounding
+```
+
 ## Agentic Routing Policy
 
-LocalMind uses LangGraph for routing, but the route decision is deterministic and signal-based.
+EvidenceDocs uses LangGraph for routing, but the route decision is deterministic and signal-based.
 
 The LLM does not randomly decide whether to use web search or documents.
 
@@ -260,12 +349,18 @@ Used when:
 
 - No uploaded document evidence is relevant.
 - No current online information is needed.
-- The question can be answered from normal conversation and memory.
+- The system should refuse to answer from general knowledge.
 
 Example:
 
 ```text
-Explain what RAG means in simple terms.
+Who won the football game yesterday?
+```
+
+In this route, EvidenceDocs returns a grounded refusal:
+
+```text
+I can't answer that from the uploaded or seeded PDFs in this chat.
 ```
 
 ### `RAG`
@@ -318,45 +413,96 @@ This route combines:
 - session-scoped hybrid RAG results
 - Tavily web search results
 
-## Routing Score Logic
+## Routing Decision Policy
 
-The route is selected using weighted scores.
+The route is selected using an explainable decision policy. This is easier to test and explain than asking the LLM to choose tools.
 
 Simplified version:
 
 ```python
-web_score = 0
-if web_search_mode:
-    web_score += 1.0
-if explicit_web_intent:
-    web_score += 0.85
-web_score += freshness_need * 0.7
-web_score -= document_intent * 0.4
+if web_search_mode or explicit_web_intent:
+    if retrieval_confidence >= 0.45:
+        route = "RAG_WEB"
+    else:
+        route = "WEB_SEARCH"
 
-rag_score = retrieval_confidence
-rag_score += document_intent * 0.55
-if explicit_web_intent or web_search_mode:
-    rag_score -= 0.5
-if freshness_need and not document_intent:
-    rag_score -= 0.25
+elif freshness_need:
+    if document_intent and retrieval_confidence >= 0.45:
+        route = "RAG_WEB"
+    else:
+        route = "WEB_SEARCH"
 
-chat_score = 0.35
-chat_score += analytical_depth * 0.2
-if no_web_signal and no_document_signal:
-    chat_score += 0.25
+elif document_intent:
+    if retrieval_confidence >= 0.45:
+        route = "RAG"
+    else:
+        route = "CHAT"
 
-rag_web_score = 0
-if documents_exist and web_or_freshness_signal:
-    rag_web_score = retrieval_confidence + freshness_need * 0.55 + document_intent * 0.45
+elif retrieval_confidence >= 0.75:
+    route = "RAG"
+
+else:
+    route = "CHAT"
 ```
-
-The highest score wins.
 
 The backend streams the chosen route, confidence score, and rationale to the frontend.
 
+## Evaluation
+
+EvidenceDocs includes a small evaluation scaffold in:
+
+```text
+backend/evaluation/eval_cases.json
+backend/evaluation/run_eval.py
+```
+
+Run it from `backend`:
+
+```powershell
+.\.venv\Scripts\python -m evaluation.run_eval
+```
+
+Current evaluation focuses on routing accuracy. The recommended next benchmark should include:
+
+- 20 document questions
+- 10 web questions
+- 10 chat questions
+- 10 mixed RAG plus web questions
+
+Recommended metrics:
+
+| Metric | Purpose |
+| --- | --- |
+| Route accuracy | Measures whether the router selected CHAT, RAG, WEB_SEARCH, or RAG_WEB correctly |
+| Recall@5 | Measures whether relevant chunks appear in the top 5 retrieved chunks |
+| MRR | Measures how early the first relevant chunk appears |
+| nDCG@5 | Measures ranking quality when relevance has graded scores |
+| Citation accuracy | Measures whether cited sources actually support the answer |
+| Faithfulness | Measures whether factual claims are grounded in retrieved evidence |
+| Latency | Measures the speed trade-off of reranking and verification |
+
+Example comparison table for a future report:
+
+| Retrieval Method | Recall@5 | MRR |
+| --- | ---: | ---: |
+| Semantic only | 0.72 | 0.61 |
+| BM25 only | 0.68 | 0.57 |
+| Semantic + BM25 + RRF | 0.84 | 0.73 |
+| RRF + reranker | 0.90 | 0.81 |
+
+## Grounded Answer Verification
+
+The current implementation grounds answers by passing only retrieved document chunks and web snippets into the model with source citations. A stronger next step is a second-pass faithfulness judge:
+
+```text
+answer + retrieved evidence -> supported / partially supported / unsupported
+```
+
+For the portfolio report, this can be described as planned "Grounded Answer Verification." A simple implementation would ask the local LLM to check whether each factual claim is supported by the retrieved chunks or web sources, then warn the user when evidence is insufficient.
+
 ## Web Search Method
 
-LocalMind uses Tavily for reliable web search.
+EvidenceDocs uses Tavily for reliable web search.
 
 DuckDuckGo was tested earlier, but it can rate-limit because it uses public endpoints rather than a stable API contract. Tavily is more reliable for demos.
 
@@ -458,6 +604,29 @@ Supported file types:
 .md
 ```
 
+### `POST /documents/seed`
+
+Loads the built-in seed PDF pack into the active chat session.
+
+Form fields:
+
+```text
+session_id
+```
+
+Returns:
+
+```json
+{
+  "documents": [
+    {
+      "filename": "ai_internship_requirements.pdf",
+      "chunks": 3
+    }
+  ]
+}
+```
+
 ### `GET /documents?session_id=...`
 
 Lists indexed documents for one chat session.
@@ -521,7 +690,7 @@ Create `backend/.env`:
 OLLAMA_BASE_URL=http://localhost:11434
 OLLAMA_CHAT_MODEL=llama3.1:8b
 OLLAMA_EMBED_MODEL=nomic-embed-text
-DATABASE_PATH=./data/localmind.sqlite3
+DATABASE_PATH=./data/evidencedocs.sqlite3
 CHROMA_PATH=./chroma
 RAG_TOP_K=5
 WEB_TOP_K=5
@@ -535,7 +704,7 @@ BRAVE_API_KEY=
 From project root:
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File .\start_localmind.ps1
+powershell -ExecutionPolicy Bypass -File .\start_evidencedocs.ps1
 ```
 
 Frontend:

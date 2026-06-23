@@ -1,9 +1,10 @@
 from app.schemas import Source
 
 
-SYSTEM_PROMPT = """You are LocalMind, a local AI assistant.
+SYSTEM_PROMPT = """You are EvidenceDocs, a seeded PDF research assistant.
 Answer clearly and cite provided sources when they are available.
 If the provided document context does not answer the question, say so instead of inventing details.
+When Web Search is not active, answer only from uploaded or seeded PDF/document context.
 For web results, summarize only what the search snippets support and include links in sources.
 """
 
@@ -24,7 +25,7 @@ def build_messages(
 
     context_text = "\n\n".join(context) if isinstance(context, list) else context or ""
     route_instruction = {
-        "CHAT": "Use the chat history and answer normally.",
+        "CHAT": "Do not answer from general knowledge. Say the PDFs do not contain enough evidence.",
         "RAG": "Use the hybrid RAG document context as the primary evidence and cite source numbers.",
         "WEB_SEARCH": "Use the web search snippets as the primary evidence and cite source numbers.",
         "RAG_WEB": "Compare and synthesize document context with web search snippets. Be explicit about which claims come from uploaded documents and which come from online results.",

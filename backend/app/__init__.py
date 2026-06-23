@@ -1,1 +1,1 @@
-"""LocalMind backend package."""
+"""EvidenceDocs backend package."""

@@ -15,7 +15,7 @@ from app.agent_graph import choose_route_with_graph
 from app.schemas import ChatStreamRequest
 from app.web_search import web_search
 
-app = FastAPI(title="LocalMind API")
+app = FastAPI(title="EvidenceDocs API")
 
 app.add_middleware(
     CORSMiddleware,
@@ -30,6 +30,7 @@ app.add_middleware(
 def startup() -> None:
     db.init_db()
     Path("./data/uploads").mkdir(parents=True, exist_ok=True)
+    Path("./seeds/pdfs").mkdir(parents=True, exist_ok=True)
     clear_legacy_documents()
 
 
@@ -96,6 +97,26 @@ async def upload_document(session_id: str = Form(...), file: UploadFile = File(.
     return {"filename": upload_path.name, "chunks": chunks}
 
 
+@app.post("/documents/seed")
+async def load_seed_documents(session_id: str = Form(...)):
+    seed_dir = Path("./seeds/pdfs")
+    if not seed_dir.exists():
+        raise HTTPException(status_code=404, detail="Seed PDF directory was not found.")
+
+    loaded: list[dict] = []
+    upload_dir = Path("./data/uploads") / session_id
+    upload_dir.mkdir(parents=True, exist_ok=True)
+
+    for seed_path in sorted(seed_dir.glob("*.pdf")):
+        target_path = upload_dir / seed_path.name
+        delete_document(seed_path.name, session_id)
+        target_path.write_bytes(seed_path.read_bytes())
+        chunks = await ingest_document(target_path, session_id)
+        loaded.append({"filename": seed_path.name, "chunks": chunks})
+
+    return {"documents": loaded}
+
+
 @app.post("/chat/stream")
 async def chat_stream(payload: ChatStreamRequest):
     async def generate() -> AsyncIterator[str]:
@@ -131,7 +152,7 @@ async def chat_stream(payload: ChatStreamRequest):
             elif route == "RAG":
                 yield sse("status", {"message": "Using uploaded documents..."})
             else:
-                yield sse("status", {"message": "Generating answer..."})
+                yield sse("status", {"message": "No grounded document answer found."})
 
             yield sse(
                 "route",
@@ -142,6 +163,17 @@ async def chat_stream(payload: ChatStreamRequest):
                     "signals": route_state["signals"],
                 },
             )
+            if route == "CHAT":
+                assistant_text = (
+                    "I can't answer that from the uploaded or seeded PDFs in this chat. "
+                    "Load the seed PDFs, upload a relevant PDF, or enable Web Search Mode if you want me to use online information."
+                )
+                yield sse("token", {"token": assistant_text})
+                save_message(payload.session_id, "assistant", assistant_text)
+                yield sse("sources", {"sources": []})
+                yield sse("done", {"message": "complete"})
+                return
+
             messages_for_llm = build_messages(
                 payload.message,
                 history,

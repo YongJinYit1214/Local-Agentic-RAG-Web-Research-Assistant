@@ -16,6 +16,10 @@ class RouteDecision(BaseModel):
     signals: dict[str, float | bool]
 
 
+RAG_THRESHOLD = 0.45
+STRONG_RAG_THRESHOLD = 0.75
+
+
 EXPLICIT_WEB_PHRASES = (
     "search the web",
     "search web",
@@ -100,41 +104,27 @@ def analyze_route(
     has_strong_docs = retrieval_confidence >= 0.62
     has_possible_docs = retrieval_confidence >= 0.42
 
-    web_score = 0.0
-    if web_search_mode:
-        web_score += 1.0
-    if explicit_web:
-        web_score += 0.85
-    web_score += freshness_need * 0.7
-    if document_intent:
-        web_score -= document_intent * 0.4
+    if web_search_mode or explicit_web:
+        route = Route.RAG_WEB if retrieval_confidence >= RAG_THRESHOLD else Route.WEB_SEARCH
+    elif freshness_need:
+        route = Route.RAG_WEB if document_intent and retrieval_confidence >= RAG_THRESHOLD else Route.WEB_SEARCH
+    elif document_intent:
+        route = Route.RAG if retrieval_confidence >= RAG_THRESHOLD else Route.CHAT
+    elif retrieval_confidence >= STRONG_RAG_THRESHOLD:
+        route = Route.RAG
+    else:
+        route = Route.CHAT
 
-    rag_score = 0.0
-    rag_score += retrieval_confidence
-    rag_score += document_intent * 0.55
-    if explicit_web or web_search_mode:
-        rag_score -= 0.5
-    if freshness_need >= 0.5 and not document_intent:
-        rag_score -= 0.25
-
-    chat_score = 0.35 + analytical_depth * 0.2
-    if not explicit_web and freshness_need == 0 and not has_possible_docs:
-        chat_score += 0.25
-
-    hybrid_score = 0.0
-    if has_possible_docs and (web_search_mode or explicit_web or freshness_need >= 0.5):
-        hybrid_score = retrieval_confidence + freshness_need * 0.55 + document_intent * 0.45
-    if web_search_mode and has_possible_docs and document_intent:
-        hybrid_score += 0.35
-
-    scores = {
-        Route.WEB_SEARCH: max(0.0, web_score),
-        Route.RAG: max(0.0, rag_score),
-        Route.RAG_WEB: max(0.0, hybrid_score),
-        Route.CHAT: max(0.0, chat_score),
-    }
-    route = max(scores, key=scores.get)
-    confidence = min(0.99, max(scores.values()))
+    confidence = min(
+        0.99,
+        max(
+            retrieval_confidence,
+            0.85 if web_search_mode or explicit_web else 0,
+            freshness_need,
+            document_intent,
+            0.6 if route == Route.CHAT else 0,
+        ),
+    )
 
     if route == Route.RAG_WEB:
         rationale = "The request needs both uploaded-document grounding and fresh external context."
@@ -145,7 +135,9 @@ def analyze_route(
     else:
         rationale = "No strong web or document-grounding signal was found, so chat history and general reasoning are enough."
 
-    if has_possible_docs and route == Route.CHAT:
+    if document_intent and route == Route.CHAT:
+        rationale = "The request mentions documents, but retrieval confidence is too low for reliable grounding."
+    elif has_possible_docs and route == Route.CHAT:
         rationale = "Document evidence was weak, so the assistant avoids forcing unrelated citations."
 
     return RouteDecision(
@@ -160,6 +152,7 @@ def analyze_route(
             "analytical_depth": round(analytical_depth, 2),
             "retrieval_confidence": round(retrieval_confidence, 2),
             "strong_document_match": has_strong_docs,
+            "possible_document_match": has_possible_docs,
         },
     )
 

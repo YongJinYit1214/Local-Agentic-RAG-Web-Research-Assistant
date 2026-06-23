@@ -2,8 +2,8 @@ import type { Metadata } from "next";
 import "./globals.css";
 
 export const metadata: Metadata = {
-  title: "LocalMind",
-  description: "Local Agentic RAG Assistant with Web Search and Streaming Chat"
+  title: "EvidenceDocs",
+  description: "Seeded PDF RAG Research Assistant with Web Search"
 };
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {

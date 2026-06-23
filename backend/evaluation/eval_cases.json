@@ -1,0 +1,37 @@
+[
+  {
+    "id": "chat_001",
+    "query": "Explain what RAG means in simple terms.",
+    "web_search_mode": false,
+    "retrieval_confidence": 0.0,
+    "expected_route": "CHAT"
+  },
+  {
+    "id": "rag_001",
+    "query": "What does this uploaded file say in the conclusion?",
+    "web_search_mode": false,
+    "retrieval_confidence": 0.82,
+    "expected_route": "RAG"
+  },
+  {
+    "id": "web_001",
+    "query": "Search the web for latest AI regulation news.",
+    "web_search_mode": true,
+    "retrieval_confidence": 0.0,
+    "expected_route": "WEB_SEARCH"
+  },
+  {
+    "id": "rag_web_001",
+    "query": "Compare this uploaded policy with the latest AI regulation news.",
+    "web_search_mode": false,
+    "retrieval_confidence": 0.78,
+    "expected_route": "RAG_WEB"
+  },
+  {
+    "id": "web_002",
+    "query": "What is current news about Nvidia?",
+    "web_search_mode": false,
+    "retrieval_confidence": 0.0,
+    "expected_route": "WEB_SEARCH"
+  }
+]
