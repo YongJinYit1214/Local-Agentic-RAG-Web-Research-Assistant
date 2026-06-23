@@ -2,7 +2,7 @@
 
 EvidenceDocs is a seeded PDF RAG research assistant built with Next.js, FastAPI, Ollama, ChromaDB, SQLite, Tavily, and LangGraph.
 
-The goal is to demonstrate a full-stack AI assistant that answers only from seeded or uploaded PDFs by default. If the active PDFs cannot answer a question, the assistant says it cannot answer from the available evidence. It uses web search only when Web Search Mode is enabled or the deterministic router detects an explicit/current web request.
+The goal is to demonstrate a full-stack AI assistant that answers only from seeded or uploaded PDFs by default. If the active PDFs cannot answer a question, the assistant says it cannot answer from the available evidence. It uses web search only when Web Search Mode is enabled or the user explicitly writes `web search`.
 
 ## Core Capabilities
 
@@ -460,8 +460,8 @@ The router evaluates these signals:
 | Signal | Meaning |
 | --- | --- |
 | `web_search_mode` | User explicitly enabled web search in the UI |
-| `explicit_web_intent` | Message says things like "search the web", "find links", or "look up online" |
-| `freshness_need` | Message asks for latest/current/today/news/price/schedule/release/policy updates |
+| `explicit_web_intent` | Message contains the exact phrase `web search` |
+| `freshness_need` | Message asks for latest/current/today/news/price/schedule/release/policy updates. This is tracked for explanation, but it does not trigger web search by itself. |
 | `document_intent` | Message references uploaded files, PDFs, reports, pages, citations, or "this file" |
 | `analytical_depth` | Message asks to compare, evaluate, explain, recommend, or reason |
 | `retrieval_confidence` | Hybrid RAG returned usable chunks for the active session |
@@ -474,13 +474,13 @@ The router evaluates these signals:
 Used when:
 
 - No uploaded document evidence is relevant.
-- No current online information is needed.
+- Web Search Mode is off and the user did not write `web search`.
 - The system should refuse to answer from general knowledge.
 
 Example:
 
 ```text
-Who won the football game yesterday?
+What's the weather now?
 ```
 
 In this route, EvidenceDocs returns a grounded refusal:
@@ -515,23 +515,22 @@ if hybrid_retrieval_returns_chunks and document_intent is present:
 Used when:
 
 - Web Search Mode is enabled.
-- The user explicitly asks to search online.
-- The question requires current information.
+- The user explicitly includes the phrase `web search`.
 
 Example:
 
 ```text
-Search the web for the latest AI regulation news.
+Use web search for the latest AI regulation news.
 ```
 
 ### `RAG_WEB`
 
-Used when both uploaded documents and current web information are needed.
+Used when both uploaded documents and web information are needed.
 
 Example:
 
 ```text
-Compare this uploaded AI policy with the latest AI regulation news.
+Use web search to compare this uploaded AI policy with the latest AI regulation news.
 ```
 
 This route combines:
@@ -553,10 +552,10 @@ if web_search_mode or explicit_web_intent:
         route = "WEB_SEARCH"
 
 elif freshness_need:
-    if document_intent and retrieval_confidence >= 0.45:
-        route = "RAG_WEB"
+    if retrieval_confidence >= 0.45:
+        route = "RAG"
     else:
-        route = "WEB_SEARCH"
+        route = "CHAT"
 
 elif document_intent:
     if retrieval_confidence >= 0.45:

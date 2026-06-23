@@ -21,15 +21,7 @@ STRONG_RAG_THRESHOLD = 0.75
 
 
 EXPLICIT_WEB_PHRASES = (
-    "search the web",
-    "search web",
-    "search online",
     "web search",
-    "look up online",
-    "browse",
-    "google",
-    "find links",
-    "find sources online",
 )
 
 FRESHNESS_TERMS = (
@@ -40,17 +32,25 @@ FRESHNESS_TERMS = (
     "this month",
     "recent",
     "newest",
-    "now",
     "as of",
     "news",
     "release",
     "announced",
     "price",
     "stock",
-    "weather",
     "schedule",
     "regulation",
     "policy update",
+)
+
+WEATHER_TERMS = (
+    "weather",
+    "temperature",
+    "forecast",
+    "rain",
+    "raining",
+    "storm",
+    "humidity",
 )
 
 DOCUMENT_TERMS = (
@@ -98,6 +98,7 @@ def analyze_route(
     retrieval_confidence: float = 0,
 ) -> RouteDecision:
     explicit_web = _contains_any(message, EXPLICIT_WEB_PHRASES)
+    weather_intent = _contains_any(message, WEATHER_TERMS)
     freshness_need = _density(message, FRESHNESS_TERMS)
     document_intent = _density(message, DOCUMENT_TERMS)
     analytical_depth = _density(message, ANALYTICAL_TERMS)
@@ -106,8 +107,10 @@ def analyze_route(
 
     if web_search_mode or explicit_web:
         route = Route.RAG_WEB if retrieval_confidence >= RAG_THRESHOLD else Route.WEB_SEARCH
+    elif weather_intent:
+        route = Route.RAG if document_intent and retrieval_confidence >= RAG_THRESHOLD else Route.CHAT
     elif freshness_need:
-        route = Route.RAG_WEB if document_intent and retrieval_confidence >= RAG_THRESHOLD else Route.WEB_SEARCH
+        route = Route.RAG if retrieval_confidence >= RAG_THRESHOLD else Route.CHAT
     elif document_intent:
         route = Route.RAG if retrieval_confidence >= RAG_THRESHOLD else Route.CHAT
     elif retrieval_confidence >= STRONG_RAG_THRESHOLD:
@@ -129,13 +132,15 @@ def analyze_route(
     if route == Route.RAG_WEB:
         rationale = "The request needs both uploaded-document grounding and fresh external context."
     elif route == Route.WEB_SEARCH:
-        rationale = "The request needs external or fresh information, or Web Search Mode is enabled."
+        rationale = "Web Search Mode is enabled or the user explicitly wrote 'web search'."
     elif route == Route.RAG:
         rationale = "Uploaded documents have enough semantic match, and the request benefits from grounded citations."
     else:
-        rationale = "No strong web or document-grounding signal was found, so chat history and general reasoning are enough."
+        rationale = "No permitted web-search trigger or reliable document evidence was found, so the assistant should refuse."
 
-    if document_intent and route == Route.CHAT:
+    if weather_intent and route == Route.CHAT:
+        rationale = "Weather is live external data, and Web Search Mode or the phrase 'web search' was not used."
+    elif document_intent and route == Route.CHAT:
         rationale = "The request mentions documents, but retrieval confidence is too low for reliable grounding."
     elif has_possible_docs and route == Route.CHAT:
         rationale = "Document evidence was weak, so the assistant avoids forcing unrelated citations."
@@ -147,6 +152,7 @@ def analyze_route(
         signals={
             "web_search_mode": web_search_mode,
             "explicit_web_intent": explicit_web,
+            "weather_intent": weather_intent,
             "freshness_need": round(freshness_need, 2),
             "document_intent": round(document_intent, 2),
             "analytical_depth": round(analytical_depth, 2),
