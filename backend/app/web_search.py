@@ -139,7 +139,8 @@ async def web_search(query: str) -> tuple[str, list[Source]]:
     for index, row in enumerate(rows, start=1):
         title = row.get("title") or "Untitled result"
         url = row.get("href")
-        body = row.get("body") or ""
-        snippets.append(f"[{index}] {title}\nProvider: {provider_name}\nURL: {url}\nSnippet: {body}")
-        sources.append(Source(title=title, url=url, snippet=body[:240]))
+        body = (row.get("body") or "").strip()
+        compact_body = body[:260]
+        snippets.append(f"[{index}] {title}\nProvider: {provider_name}\nURL: {url}\nSnippet: {compact_body}")
+        sources.append(Source(title=title, url=url, snippet=compact_body[:240]))
     return "\n\n".join(snippets), sources

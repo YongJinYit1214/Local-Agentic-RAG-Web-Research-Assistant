@@ -131,16 +131,22 @@ async def chat_stream(payload: ChatStreamRequest):
             save_message(payload.session_id, "user", payload.message)
             history = get_messages(payload.session_id)
 
-            await ensure_seed_documents(payload.session_id)
-            yield sse("status", {"message": "Searching documents..."})
-            contexts, rag_sources, retrieval_signals = await retrieve(payload.message, payload.session_id)
-            route_state = choose_route_with_graph(
-                payload.message,
-                payload.web_search_mode,
-                retrieval_signals.confidence,
-                retrieval_signals.max_query_term_coverage,
-                retrieval_signals.keyword_match_count,
-            )
+            web_only_request = payload.web_search_mode or "web search" in payload.message.lower()
+            if web_only_request:
+                contexts = []
+                rag_sources = []
+                route_state = choose_route_with_graph(payload.message, payload.web_search_mode, 0, 0, 0)
+            else:
+                await ensure_seed_documents(payload.session_id)
+                yield sse("status", {"message": "Searching documents..."})
+                contexts, rag_sources, retrieval_signals = await retrieve(payload.message, payload.session_id)
+                route_state = choose_route_with_graph(
+                    payload.message,
+                    payload.web_search_mode,
+                    retrieval_signals.confidence,
+                    retrieval_signals.max_query_term_coverage,
+                    retrieval_signals.keyword_match_count,
+                )
             route = route_state["route"]
 
             context: list[str] | str | None = contexts

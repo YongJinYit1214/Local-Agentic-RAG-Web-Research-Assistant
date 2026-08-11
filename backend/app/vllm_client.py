@@ -65,6 +65,7 @@ async def stream_chat(messages: list[dict[str, str]]) -> AsyncIterator[str]:
         "messages": messages,
         "stream": True,
         "temperature": 0.2,
+        "max_tokens": 2048,
     }
 
     async with httpx.AsyncClient(timeout=None) as client:
@@ -75,7 +76,13 @@ async def stream_chat(messages: list[dict[str, str]]) -> AsyncIterator[str]:
                 json=payload,
                 headers=_headers(),
             ) as response:
-                response.raise_for_status()
+                if response.status_code >= 400:
+                    error_body = (await response.aread()).decode("utf-8", errors="replace")[:500]
+                    raise VllmUnavailableError(
+                        "vLLM chat request failed. Check that the chat server is running and that the prompt fits "
+                        f"the model context window at {settings.vllm_chat_base_url} with model {settings.vllm_chat_model}. "
+                        f"Status {response.status_code}: {error_body}"
+                    )
                 async for line in response.aiter_lines():
                     if not line.startswith("data:"):
                         continue
@@ -83,13 +90,21 @@ async def stream_chat(messages: list[dict[str, str]]) -> AsyncIterator[str]:
                     if data_text == "[DONE]":
                         break
                     data = json.loads(data_text)
+                    if data.get("error"):
+                        raise VllmUnavailableError(f"vLLM chat request failed: {data['error']}")
                     token = data.get("choices", [{}])[0].get("delta", {}).get("content", "")
                     if token:
                         yield token
+        except VllmUnavailableError:
+            raise
         except httpx.HTTPError as exc:
+            detail = ""
+            if isinstance(exc, httpx.HTTPStatusError):
+                detail = f" Status {exc.response.status_code}: {exc.response.text[:500]}"
             raise VllmUnavailableError(
-                "vLLM chat server is not reachable. Start a vLLM OpenAI-compatible chat server "
-                f"at {settings.vllm_chat_base_url} with model {settings.vllm_chat_model}."
+                "vLLM chat request failed. Check that the chat server is running and that the prompt fits "
+                f"the model context window at {settings.vllm_chat_base_url} with model {settings.vllm_chat_model}."
+                f"{detail}"
             ) from exc
 
 
@@ -100,6 +115,7 @@ async def chat_json(messages: list[dict[str, str]], schema: dict) -> str:
         "messages": messages,
         "stream": False,
         "temperature": 0,
+        "max_tokens": 256,
         "guided_json": schema,
         "response_format": {"type": "json_object"},
     }
@@ -113,8 +129,12 @@ async def chat_json(messages: list[dict[str, str]], schema: dict) -> str:
             response.raise_for_status()
             return response.json()["choices"][0]["message"]["content"]
         except httpx.HTTPError as exc:
+            detail = ""
+            if isinstance(exc, httpx.HTTPStatusError):
+                detail = f" Status {exc.response.status_code}: {exc.response.text[:500]}"
             raise VllmUnavailableError(
-                "vLLM structured chat request failed. Check the chat server and structured-output support."
+                "vLLM structured chat request failed. Check the chat server, prompt length, and structured-output support."
+                f"{detail}"
             ) from exc
 
 

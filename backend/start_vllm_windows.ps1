@@ -8,7 +8,7 @@ vllm serve Qwen/Qwen3-4B-Instruct-2507-FP8 \
   --api-key token-local \
   --task generate \
   --gpu-memory-utilization 0.95 \
-  --max-model-len 1024 \
+  --max-model-len 4096 \
   --max-num-seqs 1 \
   --enforce-eager
 '@

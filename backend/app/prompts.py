@@ -1,12 +1,22 @@
 from app.schemas import Source
 
 
+MAX_CONTEXT_CHARS = 1200
+MAX_HISTORY_CHARS = 300
+
+
 SYSTEM_PROMPT = """You are EvidenceDocs, a seeded PDF research assistant.
 Answer clearly and cite provided sources when they are available.
 If the provided document context does not answer the question, say so instead of inventing details.
 When Web Search is not active, answer only from uploaded or seeded PDF/document context.
 For web results, summarize only what the search snippets support and include links in sources.
 """
+
+
+def _trim(text: str, limit: int) -> str:
+    if len(text) <= limit:
+        return text
+    return text[:limit].rstrip() + "\n[trimmed]"
 
 
 def build_messages(
@@ -24,6 +34,7 @@ def build_messages(
         )
 
     context_text = "\n\n".join(context) if isinstance(context, list) else context or ""
+    context_text = _trim(context_text, MAX_CONTEXT_CHARS)
     route_instruction = {
         "CHAT": "Do not answer from general knowledge. Say the PDFs do not contain enough evidence.",
         "RAG": "Use the hybrid RAG document context as the primary evidence and cite source numbers.",
@@ -32,7 +43,10 @@ def build_messages(
     }[route]
 
     messages: list[dict[str, str]] = [{"role": "system", "content": SYSTEM_PROMPT}]
-    messages.extend({"role": row["role"], "content": row["content"]} for row in history[-12:])
+    messages.extend(
+        {"role": row["role"], "content": _trim(row["content"], MAX_HISTORY_CHARS)}
+        for row in history[-2:]
+    )
     messages.append(
         {
             "role": "user",

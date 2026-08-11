@@ -869,7 +869,7 @@ bash "/mnt/c/Users/jinyi/OneDrive/Desktop/stock research/backend/start_vllm_chat
 bash "/mnt/c/Users/jinyi/OneDrive/Desktop/stock research/backend/start_vllm_embed.sh"
 ```
 
-The chat model is intentionally `Qwen/Qwen3-4B-Instruct-2507-FP8`, not a 7B model, because it is more suitable for an 8 GB laptop GPU. The server starts with a 1024-token context and one concurrent sequence to keep memory usage predictable.
+The chat model is intentionally `Qwen/Qwen3-4B-Instruct-2507-FP8`, not a 7B model, because it is more suitable for an 8 GB laptop GPU. The server starts with a 4096-token context and one concurrent sequence so the backend can request up to 2048 response tokens.
 
 The embedding model remains `BAAI/bge-small-en-v1.5`. In this local vLLM install, CPU serving is not supported, so the embedding server also runs through vLLM on the GPU.
 
@@ -916,13 +916,13 @@ http://localhost:3000
 Backend:
 
 ```text
-http://localhost:8000/health
+http://localhost:8011/health
 ```
 
 vLLM through backend:
 
 ```text
-http://localhost:8000/health/vllm
+http://localhost:8011/health/vllm
 ```
 
 ## Manual Backend Start
@@ -932,7 +932,7 @@ cd backend
 python -m venv .venv
 .\.venv\Scripts\Activate.ps1
 pip install -r requirements.txt
-uvicorn app.main:app --reload --port 8000
+uvicorn app.main:app --port 8011
 ```
 
 ## Manual Frontend Start
@@ -952,7 +952,7 @@ FastAPI is probably not running.
 Check:
 
 ```text
-http://localhost:8000/health
+http://localhost:8011/health
 ```
 
 ### Backend says "vLLM chat server is not reachable" or "vLLM embedding server is not reachable"
@@ -988,7 +988,7 @@ Documents are session-scoped. If this happens:
 4. Check:
 
 ```text
-http://localhost:8000/documents?session_id=YOUR_SESSION_ID
+http://localhost:8011/documents?session_id=YOUR_SESSION_ID
 ```
 
 ### Uploading the same file twice

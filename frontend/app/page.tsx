@@ -36,7 +36,7 @@ type IndexedDocument = {
   chunks: number;
 };
 
-const API_BASE = process.env.NEXT_PUBLIC_API_BASE ?? "http://localhost:8000";
+const API_BASE = process.env.NEXT_PUBLIC_API_BASE ?? "http://localhost:8011";
 
 function newSessionId() {
   return `session_${Date.now()}`;
