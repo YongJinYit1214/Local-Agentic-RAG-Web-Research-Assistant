@@ -1,4 +1,5 @@
 import json
+import asyncio
 from pathlib import Path
 from typing import AsyncIterator
 
@@ -8,6 +9,14 @@ from fastapi.responses import StreamingResponse
 
 from app import db
 from app.db import delete_session, get_messages, list_sessions, save_message
+from app.memory import (
+    MemoryContext,
+    delete_session_memory_vector,
+    is_follow_up_message,
+    load_memory_context,
+    rewrite_query_for_retrieval,
+    update_memory_after_turn,
+)
 from app.prompts import build_messages
 from app.preindex_seeds import preindex_seed_documents
 from app.rag import clear_documents, clear_legacy_documents, delete_document, ingest_document, list_indexed_documents, retrieve
@@ -17,7 +26,7 @@ from app.services.structured_llm import verify_grounded_answer
 from app.vllm_client import VllmUnavailableError, check_vllm, stream_chat
 from app.web_search import web_search
 
-APP_BUILD = "hybrid-keyword-fallback-2026-08-11"
+APP_BUILD = "memory-system-2026-08-11"
 
 app = FastAPI(title="EvidenceDocs API")
 
@@ -40,6 +49,11 @@ def startup() -> None:
 
 def sse(event: str, data) -> str:
     return f"event: {event}\ndata: {json.dumps(data, ensure_ascii=False)}\n\n"
+
+
+def document_like_request(message: str) -> bool:
+    text = message.lower()
+    return any(term in text for term in ("pdf", "document", "file", "uploaded", "source", "citation", "page"))
 
 
 @app.get("/health")
@@ -65,7 +79,26 @@ def messages(session_id: str):
 @app.delete("/sessions/{session_id}")
 def remove_session(session_id: str):
     delete_session(session_id)
+    delete_session_memory_vector(session_id)
     return {"deleted": session_id}
+
+
+@app.get("/memory")
+def list_memory(user_id: str = Query(default="local_user")):
+    return db.list_user_memories(user_id)
+
+
+@app.delete("/memory")
+def clear_memory(user_id: str = Query(default="local_user")):
+    return {"deleted": db.clear_user_memories(user_id)}
+
+
+@app.delete("/memory/{memory_id}")
+def remove_memory(memory_id: int, user_id: str = Query(default="local_user")):
+    deleted = db.delete_user_memory(memory_id, user_id)
+    if not deleted:
+        raise HTTPException(status_code=404, detail="Memory not found.")
+    return {"deleted": memory_id}
 
 
 @app.get("/documents")
@@ -112,19 +145,27 @@ async def chat_stream(payload: ChatStreamRequest):
     async def generate() -> AsyncIterator[str]:
         assistant_text = ""
         try:
-            save_message(payload.session_id, "user", payload.message)
             history = get_messages(payload.session_id)
-
-            web_only_request = payload.web_search_mode or "web search" in payload.message.lower()
-            if web_only_request:
+            memory_context = await load_memory_context(payload.session_id, payload.message)
+            if is_follow_up_message(payload.message) and not any(row["role"] == "assistant" for row in history):
+                memory_context = MemoryContext(session_summary="", related_summaries=[], memories=[])
+            memory_text = memory_context.render()
+            save_message(payload.session_id, "user", payload.message)
+            explicit_web_request = "web search" in payload.message.lower()
+            should_search_documents = (
+                not payload.web_search_mode and not explicit_web_request
+            ) or document_like_request(payload.message)
+            if not should_search_documents:
+                retrieval_message = payload.message
                 contexts = []
                 rag_sources = []
                 route_state = choose_route_with_graph(payload.message, payload.web_search_mode, 0, 0, 0)
             else:
+                retrieval_message = await rewrite_query_for_retrieval(payload.message, history, memory_context)
                 yield sse("status", {"message": "Searching documents..."})
-                contexts, rag_sources, retrieval_signals = await retrieve(payload.message, payload.session_id)
+                contexts, rag_sources, retrieval_signals = await retrieve(retrieval_message, payload.session_id)
                 route_state = choose_route_with_graph(
-                    payload.message,
+                    retrieval_message,
                     payload.web_search_mode,
                     retrieval_signals.confidence,
                     retrieval_signals.max_query_term_coverage,
@@ -168,6 +209,14 @@ async def chat_stream(payload: ChatStreamRequest):
                 )
                 yield sse("token", {"token": assistant_text})
                 save_message(payload.session_id, "assistant", assistant_text)
+                asyncio.create_task(
+                    update_memory_after_turn(
+                        session_id=payload.session_id,
+                        user_message=payload.message,
+                        assistant_answer=assistant_text,
+                        history=history,
+                    )
+                )
                 yield sse("sources", {"sources": []})
                 yield sse("done", {"message": "complete"})
                 return
@@ -184,16 +233,26 @@ async def chat_stream(payload: ChatStreamRequest):
                 assistant_text += token
                 yield sse("token", {"token": token})
 
+            save_message(payload.session_id, "assistant", assistant_text)
+            asyncio.create_task(
+                update_memory_after_turn(
+                    session_id=payload.session_id,
+                    user_message=payload.message,
+                    assistant_answer=assistant_text,
+                    history=history,
+                )
+            )
+
             yield sse("status", {"message": "Verifying groundedness with structured JSON..."})
             verification = await verify_grounded_answer(
                 question=payload.message,
                 answer=assistant_text,
                 context=context,
                 sources=sources,
+                memory_context=memory_text,
             )
             yield sse("verification", {"verification": verification.model_dump()})
 
-            save_message(payload.session_id, "assistant", assistant_text)
             yield sse("sources", {"sources": [source.model_dump() for source in sources]})
             yield sse("done", {"message": "complete"})
         except VllmUnavailableError as exc:

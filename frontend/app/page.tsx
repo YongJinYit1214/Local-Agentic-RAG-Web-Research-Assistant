@@ -229,7 +229,9 @@ export default function Home() {
               return next;
             });
           }
-          if (eventName === "done") setStatus("Ready");
+          if (eventName === "done") {
+            setStatus("Ready");
+          }
         }
       }
     } catch (error) {

@@ -9,6 +9,7 @@ SYSTEM_PROMPT = """You are EvidenceDocs, a seeded PDF research assistant.
 Answer clearly and cite provided sources when they are available.
 If the provided document context does not answer the question, say so instead of inventing details.
 When Web Search is not active, answer only from uploaded or seeded PDF/document context.
+Memory context may help interpret follow-up wording, but memory is not factual evidence.
 For web results, summarize only what the search snippets support and include links in sources.
 """
 
@@ -25,6 +26,7 @@ def build_messages(
     route: str,
     context: list[str] | str | None = None,
     sources: list[Source] | None = None,
+    memory_context: str | None = None,
 ) -> list[dict[str, str]]:
     source_block = ""
     if sources:
@@ -53,6 +55,7 @@ def build_messages(
             "content": (
                 f"Route: {route}\n"
                 f"Instruction: {route_instruction}\n\n"
+                f"Memory context for continuity only, not evidence:\n{memory_context or 'No relevant memory.'}\n\n"
                 f"Context:\n{context_text or 'No external context.'}\n\n"
                 f"Sources:\n{source_block or 'No sources.'}\n\n"
                 f"Question: {user_message}"

@@ -8,7 +8,7 @@ The goal is to demonstrate a full-stack AI assistant that answers only from seed
 
 - Local LLM chat through vLLM OpenAI-compatible serving.
 - Token-by-token streaming from FastAPI to Next.js.
-- Session-based chat memory stored in SQLite.
+- Layered chat memory with recent messages, session summaries, and structured user memories.
 - Session-scoped uploaded documents.
 - Seed PDF pack for repeatable demos.
 - Hybrid RAG retrieval over seeded PDFs and uploaded documents.
@@ -30,6 +30,7 @@ The goal is to demonstrate a full-stack AI assistant that answers only from seed
 | Vector DB | ChromaDB |
 | Keyword index | SQLite `keyword_chunks` table + BM25 |
 | Chat DB | SQLite |
+| Memory DB | SQLite structured memory + Chroma semantic summary index |
 | Web Search | Tavily |
 | Agent Routing | LangGraph |
 
@@ -44,7 +45,11 @@ Next.js Chat UI
   v
 FastAPI /chat/stream
   |
-  +--> SQLite memory: save/load messages
+  +--> SQLite memory
+  |       recent messages
+  |       session summary
+  |       relevant structured memories
+  |       follow-up query rewrite
   |
   +--> Hybrid RAG retrieval over shared seed PDFs + current-session uploads
   |       semantic search: ChromaDB + vLLM embeddings
@@ -77,6 +82,12 @@ Frontend sends:
   |
   v
 Backend saves user message
+  |
+  v
+Memory system:
+  - loads recent messages
+  - retrieves relevant memories only
+  - rewrites follow-up questions into standalone retrieval queries
   |
   v
 Hybrid RAG checks:
@@ -750,19 +761,126 @@ Tavily -> Brave Search -> DuckDuckGo fallback
 
 ## Chat Memory
 
-Chat memory is stored in SQLite.
+EvidenceDocs uses layered memory instead of blindly injecting the full transcript.
 
 Tables:
 
 - `sessions`
 - `messages`
+- `session_memories`
+- `user_memories`
 
-For each message:
+### Memory Layers
 
-- user messages are saved before generation
-- assistant messages are saved after streaming completes
+| Layer | Storage | Purpose |
+| --- | --- | --- |
+| Recent messages | SQLite `messages` | Handles immediate conversation flow |
+| Session summary | SQLite `session_memories` | Keeps compact context for the current chat |
+| Structured user memory | SQLite `user_memories` | Stores durable preferences, goals, projects, and stable facts |
+| Semantic memory summaries | ChromaDB `evidencedocs_memory_summaries` | Retrieves related past-session summaries for fuzzy recall |
 
-When generating a response, the backend loads recent chat history and includes it in the prompt.
+### Runtime Flow
+
+```text
+User sends message
+  |
+  v
+Save raw user message
+  |
+  v
+Load memory context:
+  - recent messages
+  - current session summary
+  - relevant structured memories
+  - related semantic memory summaries
+  |
+  v
+Rewrite follow-up question if needed
+  |
+  v
+Run deterministic routing + RAG/web retrieval
+  |
+  v
+Stream answer
+  |
+  v
+Save assistant message
+  |
+  v
+Background memory update
+```
+
+### Relevance Gate
+
+EvidenceDocs does not inject every stored memory into every prompt.
+
+Memory storage is hybrid:
+
+- SQLite stores precise structured facts such as preferences, goals, and project names.
+- ChromaDB stores embeddings of compact session summaries for fuzzy recall across sessions.
+
+The memory gate filters by:
+
+- current message terms
+- semantic similarity over compact session summaries
+- memory type
+- confidence
+- sensitivity
+- whether the current message is a follow-up
+
+Only a small number of relevant memories are included.
+
+### Follow-Up Query Rewrite
+
+Memory helps convert vague follow-ups into standalone retrieval queries.
+
+Example:
+
+```text
+Previous topic: memory-management PDFs
+User: can u explain it more briefly?
+Standalone retrieval query: Briefly explain what the memory-management PDFs are about.
+```
+
+The rewritten query is used for RAG retrieval and routing. The final answer still cites PDFs or web sources.
+
+### Important Safety Rule
+
+Memory is not evidence.
+
+Memory can help interpret what the user means, but it cannot be used as the factual source for an answer. For normal mode, factual claims still need retrieved PDF evidence. For online claims, Web Search Mode or the exact phrase `web search` is still required.
+
+### Memory Extraction
+
+After a response completes, a background memory updater asks the local vLLM model for structured JSON:
+
+```json
+{
+  "session_summary": "Compact summary of the current chat.",
+  "memories": [
+    {
+      "memory_type": "project",
+      "key": "current_project",
+      "value": "Building EvidenceDocs, a local RAG assistant.",
+      "confidence": 0.8,
+      "sensitivity": "normal",
+      "expires_in_days": null
+    }
+  ]
+}
+```
+
+The extractor is instructed not to store facts copied from PDFs or web results as user memory. Those facts belong in retrieval sources, not memory.
+
+### User Control
+
+The frontend sidebar includes a Memory panel. The user can:
+
+- view saved memories
+- delete one memory
+- clear all memories
+
+This prevents silent memory drift and makes mistakes correctable.
 
 ## Streaming Method
 
@@ -807,6 +925,33 @@ Gets messages for a session.
 ### `DELETE /sessions/{session_id}`
 
 Deletes a chat session and its messages.
+
+### `GET /memory`
+
+Lists stored user memories for the local user.
+
+Returns:
+
+```json
+[
+  {
+    "id": 1,
+    "memory_type": "project",
+    "memory_key": "current_project",
+    "memory_value": "Building EvidenceDocs.",
+    "confidence": 0.8,
+    "sensitivity": "normal"
+  }
+]
+```
+
+### `DELETE /memory/{memory_id}`
+
+Deletes one stored memory.
+
+### `DELETE /memory`
+
+Clears all stored user memories for the local user.
 
 ### `POST /documents/upload`
 

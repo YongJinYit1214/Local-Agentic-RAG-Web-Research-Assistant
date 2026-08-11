@@ -111,7 +111,9 @@ def analyze_route(
     has_strong_docs = retrieval_confidence >= 0.62
     has_possible_docs = retrieval_confidence >= 0.42
 
-    if web_search_mode or explicit_web:
+    if web_search_mode and document_intent and not explicit_web and retrieval_confidence >= RAG_THRESHOLD:
+        route = Route.RAG
+    elif web_search_mode or explicit_web:
         route = Route.RAG_WEB if retrieval_confidence >= RAG_THRESHOLD else Route.WEB_SEARCH
     elif weather_intent:
         route = Route.RAG if document_intent and strong_document_match else Route.CHAT
@@ -148,6 +150,8 @@ def analyze_route(
 
     if weather_intent and route == Route.CHAT:
         rationale = "Weather is live external data, and Web Search Mode or the phrase 'web search' was not used."
+    elif web_search_mode and document_intent and not explicit_web and route == Route.RAG:
+        rationale = "The question is explicitly about PDFs/documents, so document grounding is used even though Web Search Mode is enabled."
     elif document_intent and route == Route.CHAT:
         rationale = "The request mentions documents, but retrieval confidence is too low for reliable grounding."
     elif has_possible_docs and route == Route.CHAT:

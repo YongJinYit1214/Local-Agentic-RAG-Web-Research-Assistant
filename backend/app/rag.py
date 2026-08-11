@@ -322,6 +322,27 @@ def _merge_with_rrf(semantic_rows: list[dict], keyword_rows: list[dict], limit: 
     return sorted(merged.values(), key=lambda row: row["rrf_score"], reverse=True)[:limit]
 
 
+def _requested_document_title_terms(query: str) -> set[str]:
+    matches = re.findall(
+        r"\b([a-zA-Z0-9_-]+)(?:'s)?\s+(?:pdf|pdfs|document|documents|file|files)\b",
+        query.lower(),
+    )
+    ignored = {"this", "that", "the", "uploaded", "seeded", "source"}
+    return {term for term in matches if term not in ignored}
+
+
+def _filter_by_requested_document_title(query: str, rows: list[dict]) -> list[dict]:
+    requested_terms = _requested_document_title_terms(query)
+    if not requested_terms:
+        return rows
+    filtered = [
+        row
+        for row in rows
+        if any(term in (row.get("metadata", {}).get("document") or "").lower() for term in requested_terms)
+    ]
+    return filtered or rows
+
+
 def _query_term_coverage(query: str, text: str) -> float:
     query_terms = set(_tokens(query))
     if not query_terms:
@@ -413,7 +434,10 @@ async def retrieve(message: str, session_id: str, top_k: int | None = None) -> t
             result_count=0,
         )
 
-    fused_rows = _merge_with_rrf(semantic_rows, keyword_rows, min(base_candidate_limit, 10))
+    fused_rows = _filter_by_requested_document_title(
+        retrieval_query,
+        _merge_with_rrf(semantic_rows, keyword_rows, min(base_candidate_limit, 10)),
+    )
     final_rows = _rerank(retrieval_query, fused_rows, top_k)
 
     contexts: list[str] = []
