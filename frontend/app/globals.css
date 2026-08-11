@@ -239,6 +239,36 @@ textarea {
   max-width: min(760px, 92%);
 }
 
+.verification {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  max-width: min(760px, 92%);
+  min-height: 28px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #fff;
+  color: var(--muted);
+  padding: 4px 8px;
+  font-size: 12px;
+  text-transform: capitalize;
+}
+
+.verification.supported {
+  border-color: #b8d8c4;
+  color: #23613d;
+}
+
+.verification.partially_supported {
+  border-color: #d8c98e;
+  color: #715b14;
+}
+
+.verification.unsupported {
+  border-color: #e5b9b9;
+  color: #8a2d2d;
+}
+
 .source {
   display: inline-flex;
   align-items: center;

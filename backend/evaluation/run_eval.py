@@ -15,6 +15,8 @@ def main() -> None:
             case["query"],
             case.get("web_search_mode", False),
             case.get("retrieval_confidence", 0.0),
+            case.get("max_query_term_coverage", 0.0),
+            case.get("keyword_match_count", 0),
         )
         predicted = decision.route.value
         expected = case["expected_route"]

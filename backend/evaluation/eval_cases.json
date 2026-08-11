@@ -42,6 +42,15 @@
     "expected_route": "CHAT"
   },
   {
+    "id": "chat_004",
+    "query": "what's the whether then",
+    "web_search_mode": false,
+    "retrieval_confidence": 0.78,
+    "max_query_term_coverage": 0.0,
+    "keyword_match_count": 0,
+    "expected_route": "CHAT"
+  },
+  {
     "id": "web_002",
     "query": "Use web search for current news about Nvidia.",
     "web_search_mode": false,

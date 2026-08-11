@@ -96,24 +96,30 @@ def analyze_route(
     message: str,
     web_search_mode: bool,
     retrieval_confidence: float = 0,
+    max_query_term_coverage: float = 0,
+    keyword_match_count: int = 0,
 ) -> RouteDecision:
     explicit_web = _contains_any(message, EXPLICIT_WEB_PHRASES)
     weather_intent = _contains_any(message, WEATHER_TERMS)
     freshness_need = _density(message, FRESHNESS_TERMS)
     document_intent = _density(message, DOCUMENT_TERMS)
     analytical_depth = _density(message, ANALYTICAL_TERMS)
+    grounded_keyword_match = keyword_match_count > 0 and max_query_term_coverage >= 0.25
+    strong_document_match = retrieval_confidence >= 0.62 and (
+        grounded_keyword_match or max_query_term_coverage >= 0.5
+    )
     has_strong_docs = retrieval_confidence >= 0.62
     has_possible_docs = retrieval_confidence >= 0.42
 
     if web_search_mode or explicit_web:
         route = Route.RAG_WEB if retrieval_confidence >= RAG_THRESHOLD else Route.WEB_SEARCH
     elif weather_intent:
-        route = Route.RAG if document_intent and retrieval_confidence >= RAG_THRESHOLD else Route.CHAT
+        route = Route.RAG if document_intent and strong_document_match else Route.CHAT
     elif freshness_need:
-        route = Route.RAG if retrieval_confidence >= RAG_THRESHOLD else Route.CHAT
+        route = Route.RAG if strong_document_match else Route.CHAT
     elif document_intent:
-        route = Route.RAG if retrieval_confidence >= RAG_THRESHOLD else Route.CHAT
-    elif retrieval_confidence >= STRONG_RAG_THRESHOLD:
+        route = Route.RAG if retrieval_confidence >= RAG_THRESHOLD and (grounded_keyword_match or has_strong_docs) else Route.CHAT
+    elif retrieval_confidence >= STRONG_RAG_THRESHOLD and grounded_keyword_match:
         route = Route.RAG
     else:
         route = Route.CHAT
@@ -128,6 +134,8 @@ def analyze_route(
             0.6 if route == Route.CHAT else 0,
         ),
     )
+    if route == Route.CHAT and not (web_search_mode or explicit_web):
+        confidence = min(confidence, 0.65)
 
     if route == Route.RAG_WEB:
         rationale = "The request needs both uploaded-document grounding and fresh external context."
@@ -157,6 +165,8 @@ def analyze_route(
             "document_intent": round(document_intent, 2),
             "analytical_depth": round(analytical_depth, 2),
             "retrieval_confidence": round(retrieval_confidence, 2),
+            "max_query_term_coverage": round(max_query_term_coverage, 2),
+            "keyword_match_count": keyword_match_count,
             "strong_document_match": has_strong_docs,
             "possible_document_match": has_possible_docs,
         },

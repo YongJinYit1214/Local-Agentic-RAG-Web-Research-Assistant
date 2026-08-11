@@ -1,5 +1,6 @@
 import re
 import uuid
+from dataclasses import dataclass
 from pathlib import Path
 
 import chromadb
@@ -8,15 +9,24 @@ from pypdf import PdfReader
 from rank_bm25 import BM25Okapi
 
 from app.config import get_settings
-from app.ollama_client import embed
+from app.vllm_client import embed
 from app.schemas import Source
 
 
-COLLECTION_NAME = "evidencedocs_documents"
+COLLECTION_NAME = "evidencedocs_vllm_bge_documents"
 RRF_K = 60
 PARENT_CHUNK_TOKENS = 1200
 CHILD_CHUNK_TOKENS = 420
 CHILD_OVERLAP_TOKENS = 80
+
+
+@dataclass(frozen=True)
+class RetrievalSignals:
+    confidence: float
+    max_query_term_coverage: float
+    keyword_match_count: int
+    semantic_match_count: int
+    result_count: int
 
 
 def _client():
@@ -313,31 +323,50 @@ def _rerank(query: str, rows: list[dict], limit: int) -> list[dict]:
     return (filtered or reranked)[:limit]
 
 
-def _retrieval_confidence(query: str, rows: list[dict]) -> float:
+def _retrieval_signals(query: str, rows: list[dict]) -> RetrievalSignals:
     if not rows:
-        return 0.0
+        return RetrievalSignals(
+            confidence=0.0,
+            max_query_term_coverage=0.0,
+            keyword_match_count=0,
+            semantic_match_count=0,
+            result_count=0,
+        )
     max_rrf = max(row.get("rrf_score", 0.0) for row in rows) or 1.0
     rrf_score_norm = min(1.0, rows[0].get("rrf_score", 0.0) / max_rrf)
     rerank_score_norm = min(1.0, (sum(row.get("rerank_score", 0.0) for row in rows) / len(rows)) / 5.0)
     query_term_coverage = max(_query_term_coverage(query, row["document"]) for row in rows)
     unique_sources = {row.get("metadata", {}).get("document") for row in rows}
     source_diversity = min(1.0, len(unique_sources) / max(1, len(rows)))
-    return round(
+    confidence = round(
         (0.4 * rrf_score_norm)
         + (0.3 * rerank_score_norm)
         + (0.2 * query_term_coverage)
         + (0.1 * source_diversity),
         2,
     )
+    return RetrievalSignals(
+        confidence=confidence,
+        max_query_term_coverage=round(query_term_coverage, 2),
+        keyword_match_count=sum(1 for row in rows if row.get("keyword_rank")),
+        semantic_match_count=sum(1 for row in rows if row.get("semantic_rank")),
+        result_count=len(rows),
+    )
 
 
-async def retrieve(message: str, session_id: str, top_k: int | None = None) -> tuple[list[str], list[Source], float]:
+async def retrieve(message: str, session_id: str, top_k: int | None = None) -> tuple[list[str], list[Source], RetrievalSignals]:
     settings = get_settings()
     collection = _collection()
     session_rows = collection.get(where={"session_id": session_id})
     session_count = len(session_rows.get("ids", []))
     if session_count == 0:
-        return [], [], 0
+        return [], [], RetrievalSignals(
+            confidence=0.0,
+            max_query_term_coverage=0.0,
+            keyword_match_count=0,
+            semantic_match_count=0,
+            result_count=0,
+        )
 
     top_k = top_k or settings.rag_top_k
     retrieval_query = preprocess_query(message)
@@ -368,5 +397,5 @@ async def retrieve(message: str, session_id: str, top_k: int | None = None) -> t
                 snippet=f"{retrieval_detail}. {doc[:220]}",
             )
         )
-    retrieval_confidence = _retrieval_confidence(retrieval_query, final_rows)
-    return contexts, sources, retrieval_confidence
+    retrieval_signals = _retrieval_signals(retrieval_query, final_rows)
+    return contexts, sources, retrieval_signals

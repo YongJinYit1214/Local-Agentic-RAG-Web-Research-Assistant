@@ -1,12 +1,12 @@
 # EvidenceDocs
 
-EvidenceDocs is a seeded PDF RAG research assistant built with Next.js, FastAPI, Ollama, ChromaDB, SQLite, Tavily, and LangGraph.
+EvidenceDocs is a seeded PDF RAG research assistant built with Next.js, FastAPI, vLLM, ChromaDB, SQLite, Tavily, and LangGraph.
 
 The goal is to demonstrate a full-stack AI assistant that answers only from seeded or uploaded PDFs by default. If the active PDFs cannot answer a question, the assistant says it cannot answer from the available evidence. It uses web search only when Web Search Mode is enabled or the user explicitly writes `web search`.
 
 ## Core Capabilities
 
-- Local LLM chat through Ollama.
+- Local LLM chat through vLLM OpenAI-compatible serving.
 - Token-by-token streaming from FastAPI to Next.js.
 - Session-based chat memory stored in SQLite.
 - Session-scoped uploaded documents.
@@ -14,6 +14,7 @@ The goal is to demonstrate a full-stack AI assistant that answers only from seed
 - Hybrid RAG retrieval over uploaded documents.
 - Tavily web search for online/current information.
 - Deterministic LangGraph routing instead of letting the LLM randomly choose tools.
+- Structured JSON groundedness verification with Pydantic validation.
 - Source and citation display for document chunks and web links.
 - Delete chat sessions and uploaded documents from the UI.
 
@@ -23,9 +24,9 @@ The goal is to demonstrate a full-stack AI assistant that answers only from seed
 | --- | --- |
 | Frontend | Next.js + TypeScript |
 | Backend | FastAPI |
-| Local LLM | Ollama |
-| Chat model | `llama3.1:8b` |
-| Embedding model | `nomic-embed-text` via Ollama |
+| Local LLM serving | vLLM OpenAI-compatible server |
+| Chat model | `Qwen/Qwen3-4B-Instruct-2507-FP8` |
+| Embedding model | `BAAI/bge-small-en-v1.5` via vLLM `/v1/embeddings` |
 | Vector DB | ChromaDB |
 | Chat DB | SQLite |
 | Web Search | Tavily |
@@ -45,7 +46,7 @@ FastAPI /chat/stream
   +--> SQLite memory: save/load messages
   |
   +--> Hybrid RAG retrieval for current session
-  |       semantic search: ChromaDB + Ollama embeddings
+  |       semantic search: ChromaDB + vLLM embeddings
   |       keyword search: BM25 with IDF
   |       merge: Reciprocal Rank Fusion
   |       rerank: relevance scoring
@@ -56,7 +57,7 @@ FastAPI /chat/stream
   |
   +--> Optional Tavily web search
   |
-  +--> Ollama /api/chat streaming
+  +--> vLLM /v1/chat/completions streaming
   |
   v
 Server-Sent Events back to Next.js
@@ -88,7 +89,7 @@ Router decides route
   +--> RAG_WEB
   |
   v
-Ollama generates answer
+vLLM generates answer
   |
   v
 Backend streams tokens
@@ -313,10 +314,10 @@ parent_text
 
 ### Step 2: Semantic Search
 
-The user query is embedded using Ollama:
+The user query is embedded using the vLLM embedding server:
 
 ```text
-nomic-embed-text
+BAAI/bge-small-en-v1.5
 ```
 
 Then ChromaDB performs vector similarity search over chunks for the current session.
@@ -397,7 +398,7 @@ Both can be useful, but Chunk A may rank higher because it is strong in both exa
 
 ### Step 5: Send Top Chunks to the LLM
 
-The fused top chunks are sent to Ollama as context.
+The fused top chunks are sent to the vLLM chat model as context.
 
 Sources include retrieval details such as:
 
@@ -617,13 +618,49 @@ Example comparison table for a future report:
 
 ## Grounded Answer Verification
 
-The current implementation grounds answers by passing only retrieved document chunks and web snippets into the model with source citations. A stronger next step is a second-pass faithfulness judge:
+EvidenceDocs uses a structured internal LLM step for grounded answer verification.
+
+The final chat answer is still streamed as normal text. The JSON requirement is used in an internal judge step after generation:
 
 ```text
-answer + retrieved evidence -> supported / partially supported / unsupported
+question + answer + retrieved evidence + sources
+  |
+  v
+vLLM structured output / JSON schema
+  |
+  v
+Pydantic validation
+  |
+  v
+supported / partially_supported / unsupported
 ```
 
-For the portfolio report, this can be described as planned "Grounded Answer Verification." A simple implementation would ask the local LLM to check whether each factual claim is supported by the retrieved chunks or web sources, then warn the user when evidence is insufficient.
+Implemented file:
+
+```text
+backend/app/services/structured_llm.py
+```
+
+The verifier must return this Pydantic shape:
+
+```python
+class GroundednessVerdict(BaseModel):
+    verdict: Literal["supported", "partially_supported", "unsupported"]
+    confidence: float
+    unsupported_claims: list[str]
+    reason: str
+```
+
+Method:
+
+- The backend calls vLLM `/v1/chat/completions` with `stream: false`.
+- The request includes `guided_json: GroundednessVerdict.model_json_schema()` plus JSON response mode.
+- The prompt still explicitly says to return only JSON.
+- The response is parsed and validated with Pydantic.
+- If parsing or validation fails, the backend retries and includes the validation error.
+- After repeated JSON failures, a deterministic evidence-overlap fallback checks the answer against retrieved source text so parser failures do not get mislabeled as unsupported evidence.
+
+This gives the project a clear structured-output component without letting the LLM make risky routing/tool decisions.
 
 ## Web Search Method
 
@@ -684,6 +721,7 @@ Events:
 | `status` | Shows progress such as "Searching documents..." |
 | `route` | Shows selected route, confidence, rationale, and signals |
 | `token` | Streams assistant text token-by-token |
+| `verification` | Sends the structured groundedness verdict returned by the JSON verifier |
 | `sources` | Sends final citations and links |
 | `done` | Marks response completion |
 | `error` | Sends readable error message |
@@ -694,9 +732,9 @@ Events:
 
 Checks FastAPI.
 
-### `GET /health/ollama`
+### `GET /health/vllm`
 
-Checks whether Ollama is reachable and whether configured models are installed.
+Checks whether the vLLM chat and embedding servers are reachable and whether configured models are served.
 
 ### `GET /sessions`
 
@@ -788,25 +826,58 @@ text/event-stream
 
 ## Setup
 
-### 1. Install Ollama
+### 1. Install and Start vLLM
 
-Download Ollama:
+Install vLLM in WSL/Linux with a supported NVIDIA GPU/CUDA setup.
 
-```text
-https://ollama.com/download
-```
-
-Pull models:
+On the RTX 4060 Laptop GPU used for this project, the stable local setup is:
 
 ```powershell
-ollama pull llama3.1:8b
-ollama pull nomic-embed-text
+wsl -d Ubuntu
+python3 -m venv ~/vllm-env
+source ~/vllm-env/bin/activate
+pip install vllm==0.8.5
+pip install transformers==4.51.3 tokenizers==0.21.4 numpy==2.2.6
 ```
 
-Check Ollama:
+Recommended Windows startup:
 
 ```powershell
-Invoke-RestMethod http://127.0.0.1:11434/api/tags
+powershell -ExecutionPolicy Bypass -File .\backend\start_vllm_windows.ps1
+```
+
+This opens two persistent WSL PowerShell windows:
+
+- one for `Qwen/Qwen3-4B-Instruct-2507-FP8` chat on port `8001`
+- one for `BAAI/bge-small-en-v1.5` embeddings on port `8002`
+
+Keep both windows open while using EvidenceDocs.
+
+Alternative manual WSL startup:
+
+```powershell
+wsl -d Ubuntu
+bash "/mnt/c/Users/jinyi/OneDrive/Desktop/stock research/backend/start_vllm_servers.sh"
+```
+
+That command intentionally keeps the WSL terminal open. Start FastAPI and Next.js in separate terminals.
+
+Start one vLLM server only:
+
+```powershell
+bash "/mnt/c/Users/jinyi/OneDrive/Desktop/stock research/backend/start_vllm_chat.sh"
+bash "/mnt/c/Users/jinyi/OneDrive/Desktop/stock research/backend/start_vllm_embed.sh"
+```
+
+The chat model is intentionally `Qwen/Qwen3-4B-Instruct-2507-FP8`, not a 7B model, because it is more suitable for an 8 GB laptop GPU. The server starts with a 1024-token context and one concurrent sequence to keep memory usage predictable.
+
+The embedding model remains `BAAI/bge-small-en-v1.5`. In this local vLLM install, CPU serving is not supported, so the embedding server also runs through vLLM on the GPU.
+
+Check vLLM:
+
+```powershell
+Invoke-RestMethod http://127.0.0.1:8001/v1/models
+Invoke-RestMethod http://127.0.0.1:8002/v1/models
 ```
 
 ### 2. Configure Backend Environment
@@ -814,9 +885,11 @@ Invoke-RestMethod http://127.0.0.1:11434/api/tags
 Create `backend/.env`:
 
 ```env
-OLLAMA_BASE_URL=http://localhost:11434
-OLLAMA_CHAT_MODEL=llama3.1:8b
-OLLAMA_EMBED_MODEL=nomic-embed-text
+VLLM_CHAT_BASE_URL=http://localhost:8001/v1
+VLLM_EMBED_BASE_URL=http://localhost:8002/v1
+VLLM_API_KEY=token-local
+VLLM_CHAT_MODEL=Qwen/Qwen3-4B-Instruct-2507-FP8
+VLLM_EMBED_MODEL=BAAI/bge-small-en-v1.5
 DATABASE_PATH=./data/evidencedocs.sqlite3
 CHROMA_PATH=./chroma
 RAG_TOP_K=5
@@ -846,10 +919,10 @@ Backend:
 http://localhost:8000/health
 ```
 
-Ollama through backend:
+vLLM through backend:
 
 ```text
-http://localhost:8000/health/ollama
+http://localhost:8000/health/vllm
 ```
 
 ## Manual Backend Start
@@ -882,15 +955,14 @@ Check:
 http://localhost:8000/health
 ```
 
-### Backend says "Ollama is not reachable"
+### Backend says "vLLM chat server is not reachable" or "vLLM embedding server is not reachable"
 
-Ollama is not running or the models are not pulled.
+One or both vLLM OpenAI-compatible servers are not running.
 
-Run:
+Run the chat and embedding servers:
 
 ```powershell
-ollama pull llama3.1:8b
-ollama pull nomic-embed-text
+powershell -ExecutionPolicy Bypass -File .\backend\start_vllm_windows.ps1
 ```
 
 Then restart the backend.
@@ -922,3 +994,8 @@ http://localhost:8000/documents?session_id=YOUR_SESSION_ID
 ### Uploading the same file twice
 
 The backend deletes old chunks for the same filename in the same session before re-indexing the new copy.
+
+
+
+
+

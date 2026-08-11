@@ -4,9 +4,11 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class Settings(BaseSettings):
-    ollama_base_url: str = "http://localhost:11434"
-    ollama_chat_model: str = "llama3.1:8b"
-    ollama_embed_model: str = "nomic-embed-text"
+    vllm_chat_base_url: str = "http://localhost:8001/v1"
+    vllm_embed_base_url: str = "http://localhost:8002/v1"
+    vllm_api_key: str = "token-local"
+    vllm_chat_model: str = "Qwen/Qwen3-4B-Instruct-2507-FP8"
+    vllm_embed_model: str = "BAAI/bge-small-en-v1.5"
     database_path: str = "./data/evidencedocs.sqlite3"
     chroma_path: str = "./chroma"
     rag_top_k: int = 5

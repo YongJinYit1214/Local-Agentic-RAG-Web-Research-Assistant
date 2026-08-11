@@ -7,6 +7,14 @@ type ChatMessage = {
   role: "user" | "assistant";
   content: string;
   sources?: Source[];
+  verification?: GroundednessVerification;
+};
+
+type GroundednessVerification = {
+  verdict: "supported" | "partially_supported" | "unsupported";
+  confidence: number;
+  unsupported_claims: string[];
+  reason: string;
 };
 
 type Source = {
@@ -202,6 +210,14 @@ export default function Home() {
               return next;
             });
           }
+          if (eventName === "verification") {
+            setMessages((current) => {
+              const next = [...current];
+              const last = next[next.length - 1];
+              next[next.length - 1] = { ...last, verification: data.verification };
+              return next;
+            });
+          }
           if (eventName === "error") {
             setStatus(data.message);
             setMessages((current) => {
@@ -294,6 +310,12 @@ export default function Home() {
           {messages.map((message, index) => (
             <article key={index} className={`message ${message.role}`}>
               <div className="bubble">{message.content || (message.role === "assistant" ? "..." : "")}</div>
+              {message.verification?.verdict === "unsupported" && (
+                <div className={`verification ${message.verification.verdict}`}>
+                  <span>{message.verification.verdict.replace("_", " ")}</span>
+                  <span>{Math.round(message.verification.confidence * 100)}%</span>
+                </div>
+              )}
               {message.sources && message.sources.length > 0 && (
                 <div className="sources">
                   {message.sources.map((source, sourceIndex) => (

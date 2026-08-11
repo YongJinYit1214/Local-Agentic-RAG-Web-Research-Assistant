@@ -23,7 +23,7 @@ SEED_DOCS = {
             "Tooling and Project Expectations",
             [
                 "The intern is expected to build a small AI assistant that uses a local model, document retrieval, chat memory, and optional web search.",
-                "The preferred stack is Next.js for the frontend, FastAPI for the backend, Ollama for local LLM inference, ChromaDB for vector search, and SQLite for chat persistence.",
+                "The preferred stack is Next.js for the frontend, FastAPI for the backend, vLLM for local OpenAI-compatible inference, ChromaDB for vector search, and SQLite for chat persistence.",
                 "The project should include streaming responses, citation display, deterministic routing, and clear error handling when a source cannot answer the question.",
             ],
         ),

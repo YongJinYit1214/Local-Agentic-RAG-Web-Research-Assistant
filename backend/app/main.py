@@ -8,11 +8,12 @@ from fastapi.responses import StreamingResponse
 
 from app import db
 from app.db import delete_session, get_messages, list_sessions, save_message
-from app.ollama_client import OllamaUnavailableError, check_ollama, stream_chat
 from app.prompts import build_messages
 from app.rag import clear_documents, clear_legacy_documents, delete_document, has_document, ingest_document, list_indexed_documents, retrieve
 from app.agent_graph import choose_route_with_graph
 from app.schemas import ChatStreamRequest
+from app.services.structured_llm import verify_grounded_answer
+from app.vllm_client import VllmUnavailableError, check_vllm, stream_chat
 from app.web_search import web_search
 
 app = FastAPI(title="EvidenceDocs API")
@@ -60,9 +61,9 @@ def health() -> dict[str, str]:
     return {"status": "ok"}
 
 
-@app.get("/health/ollama")
-async def ollama_health():
-    return await check_ollama()
+@app.get("/health/vllm")
+async def vllm_health():
+    return await check_vllm()
 
 
 @app.get("/sessions")
@@ -132,11 +133,13 @@ async def chat_stream(payload: ChatStreamRequest):
 
             await ensure_seed_documents(payload.session_id)
             yield sse("status", {"message": "Searching documents..."})
-            contexts, rag_sources, retrieval_confidence = await retrieve(payload.message, payload.session_id)
+            contexts, rag_sources, retrieval_signals = await retrieve(payload.message, payload.session_id)
             route_state = choose_route_with_graph(
                 payload.message,
                 payload.web_search_mode,
-                retrieval_confidence,
+                retrieval_signals.confidence,
+                retrieval_signals.max_query_term_coverage,
+                retrieval_signals.keyword_match_count,
             )
             route = route_state["route"]
 
@@ -192,10 +195,19 @@ async def chat_stream(payload: ChatStreamRequest):
                 assistant_text += token
                 yield sse("token", {"token": token})
 
+            yield sse("status", {"message": "Verifying groundedness with structured JSON..."})
+            verification = await verify_grounded_answer(
+                question=payload.message,
+                answer=assistant_text,
+                context=context,
+                sources=sources,
+            )
+            yield sse("verification", {"verification": verification.model_dump()})
+
             save_message(payload.session_id, "assistant", assistant_text)
             yield sse("sources", {"sources": [source.model_dump() for source in sources]})
             yield sse("done", {"message": "complete"})
-        except OllamaUnavailableError as exc:
+        except VllmUnavailableError as exc:
             yield sse("error", {"message": str(exc)})
         except Exception as exc:
             yield sse("error", {"message": str(exc)})
