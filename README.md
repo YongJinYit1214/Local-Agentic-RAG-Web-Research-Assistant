@@ -874,13 +874,21 @@ The extractor is instructed not to store facts copied from PDFs or web results a
 
 ### User Control
 
-The frontend sidebar includes a Memory panel. The user can:
+The memory system runs in the backend, but the main chat UI does not show a visible Memory panel.
 
-- view saved memories
-- delete one memory
-- clear all memories
+Reason:
 
-This prevents silent memory drift and makes mistakes correctable.
+- The demo interface should stay focused on chat, uploaded documents, citations, and Web Search Mode.
+- Memory should improve follow-up understanding quietly without adding extra sidebar clutter.
+- The backend still exposes memory control endpoints for testing/admin use.
+
+Available controls:
+
+- `GET /memory` lists saved memories.
+- `DELETE /memory/{memory_id}` deletes one memory.
+- `DELETE /memory` clears all memories.
+
+This keeps memory inspectable and removable without making it part of the normal chat screen.
 
 ## Streaming Method
 
