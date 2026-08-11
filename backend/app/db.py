@@ -36,6 +36,34 @@ def init_db() -> None:
         )
         conn.execute(
             """
+            CREATE TABLE IF NOT EXISTS keyword_chunks (
+                id TEXT PRIMARY KEY,
+                session_id TEXT NOT NULL,
+                source_type TEXT NOT NULL,
+                document TEXT NOT NULL,
+                page INTEGER,
+                parent INTEGER,
+                chunk INTEGER,
+                text TEXT NOT NULL,
+                parent_text TEXT NOT NULL,
+                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_keyword_chunks_scope
+            ON keyword_chunks(session_id, source_type)
+            """
+        )
+        conn.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_keyword_chunks_document
+            ON keyword_chunks(session_id, document)
+            """
+        )
+        conn.execute(
+            """
             CREATE TABLE IF NOT EXISTS messages (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 session_id TEXT NOT NULL,
@@ -101,3 +129,62 @@ def delete_session(session_id: str) -> None:
     with connect() as conn:
         conn.execute("DELETE FROM messages WHERE session_id = ?", (session_id,))
         conn.execute("DELETE FROM sessions WHERE session_id = ?", (session_id,))
+        conn.execute("DELETE FROM keyword_chunks WHERE session_id = ?", (session_id,))
+
+
+def save_keyword_chunk(
+    *,
+    chunk_id: str,
+    session_id: str,
+    source_type: str,
+    document: str,
+    page: int,
+    parent: int,
+    chunk: int,
+    text: str,
+    parent_text: str,
+) -> None:
+    with connect() as conn:
+        conn.execute(
+            """
+            INSERT OR REPLACE INTO keyword_chunks (
+                id, session_id, source_type, document, page, parent, chunk, text, parent_text
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (chunk_id, session_id, source_type, document, page, parent, chunk, text, parent_text),
+        )
+
+
+def list_keyword_chunks_for_scope(session_id: str, seed_session_id: str) -> list[dict]:
+    with connect() as conn:
+        rows = conn.execute(
+            """
+            SELECT id, session_id, source_type, document, page, parent, chunk, text, parent_text
+            FROM keyword_chunks
+            WHERE session_id IN (?, ?)
+            """,
+            (session_id, seed_session_id),
+        ).fetchall()
+        return [dict(row) for row in rows]
+
+
+def delete_keyword_chunks(document_name: str, session_id: str | None = None) -> int:
+    with connect() as conn:
+        if session_id:
+            cursor = conn.execute(
+                "DELETE FROM keyword_chunks WHERE document = ? AND session_id = ?",
+                (document_name, session_id),
+            )
+        else:
+            cursor = conn.execute("DELETE FROM keyword_chunks WHERE document = ?", (document_name,))
+        return cursor.rowcount
+
+
+def clear_keyword_chunks(session_id: str | None = None) -> int:
+    with connect() as conn:
+        if session_id:
+            cursor = conn.execute("DELETE FROM keyword_chunks WHERE session_id = ?", (session_id,))
+        else:
+            cursor = conn.execute("DELETE FROM keyword_chunks")
+        return cursor.rowcount

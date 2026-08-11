@@ -2,10 +2,19 @@ import argparse
 import asyncio
 from pathlib import Path
 
+from app import db
 from app.rag import SEED_SESSION_ID, clear_documents, has_seed_document, ingest_document
+from app.vllm_client import check_embedding_server
 
 
 async def preindex_seed_documents(seed_dir: Path, reset: bool = False) -> list[dict]:
+    db.init_db()
+    health = await check_embedding_server()
+    if health["status"] != "ok" or not health["model_available"]:
+        raise RuntimeError(
+            "vLLM embedding server is not ready. Start it first, then rerun pre-indexing. "
+            f"Expected {health['model']} at {health['base_url']}."
+        )
     if reset:
         clear_documents(SEED_SESSION_ID)
 
@@ -21,12 +30,15 @@ async def preindex_seed_documents(seed_dir: Path, reset: bool = False) -> list[d
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Pre-index seed PDFs into the shared ChromaDB seed corpus.")
+    parser = argparse.ArgumentParser(description="Pre-index seed PDFs into the shared ChromaDB and BM25 keyword indexes.")
     parser.add_argument("--seed-dir", default="./seeds/pdfs", help="Directory containing seed PDF files.")
     parser.add_argument("--reset", action="store_true", help="Delete existing shared seed chunks before indexing.")
     args = parser.parse_args()
 
-    loaded = asyncio.run(preindex_seed_documents(Path(args.seed_dir), reset=args.reset))
+    try:
+        loaded = asyncio.run(preindex_seed_documents(Path(args.seed_dir), reset=args.reset))
+    except RuntimeError as exc:
+        raise SystemExit(str(exc)) from exc
     indexed = sum(1 for row in loaded if row["status"] == "indexed")
     skipped = sum(1 for row in loaded if row["status"] == "skipped")
     chunks = sum(row["chunks"] for row in loaded)

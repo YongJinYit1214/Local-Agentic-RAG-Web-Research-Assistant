@@ -8,6 +8,7 @@ from chromadb.config import Settings as ChromaSettings
 from pypdf import PdfReader
 from rank_bm25 import BM25Okapi
 
+from app import db
 from app.config import get_settings
 from app.vllm_client import embed
 from app.schemas import Source
@@ -104,9 +105,10 @@ async def ingest_document(path: Path, session_id: str, source_type: str = "uploa
     added = 0
     for page, text in extract_pages(path):
         for parent_index, parent_text, child_index, child_text in parent_child_chunks(text):
+            chunk_id = str(uuid.uuid4())
             vector = await embed(child_text)
             collection.add(
-                ids=[str(uuid.uuid4())],
+                ids=[chunk_id],
                 embeddings=[vector],
                 documents=[child_text],
                 metadatas=[
@@ -120,6 +122,17 @@ async def ingest_document(path: Path, session_id: str, source_type: str = "uploa
                         "source_type": source_type,
                     }
                 ],
+            )
+            db.save_keyword_chunk(
+                chunk_id=chunk_id,
+                session_id=session_id,
+                source_type=source_type,
+                document=path.name,
+                page=page,
+                parent=parent_index,
+                chunk=child_index,
+                text=child_text,
+                parent_text=parent_text,
             )
             added += 1
     return added
@@ -161,8 +174,9 @@ def has_seed_document(document_name: str) -> bool:
 
 def delete_document(document_name: str, session_id: str | None = None) -> int:
     collection = _collection()
+    deleted_keyword_rows = db.delete_keyword_chunks(document_name, session_id)
     if collection.count() == 0:
-        return 0
+        return deleted_keyword_rows
     where = {"document": document_name}
     if session_id:
         where = {"$and": [{"document": document_name}, {"session_id": session_id}]}
@@ -174,11 +188,12 @@ def delete_document(document_name: str, session_id: str | None = None) -> int:
     upload_path = Path("./data/uploads") / (session_id or "_global") / Path(document_name).name
     if upload_path.exists():
         upload_path.unlink()
-    return len(ids)
+    return max(len(ids), deleted_keyword_rows)
 
 
 def clear_documents(session_id: str | None = None) -> int:
     collection = _collection()
+    deleted_keyword_rows = db.clear_keyword_chunks(session_id)
     rows = collection.get(where=_where_session(session_id)) if session_id else collection.get()
     ids = rows.get("ids", [])
     count = len(ids)
@@ -191,7 +206,7 @@ def clear_documents(session_id: str | None = None) -> int:
         for path in uploads_dir.rglob("*"):
             if path.is_file():
                 path.unlink()
-    return count
+    return max(count, deleted_keyword_rows)
 
 
 def clear_legacy_documents() -> int:
@@ -253,29 +268,36 @@ def preprocess_query(query: str) -> str:
     return " ".join([cleaned, *expansions]).strip()
 
 
-def _keyword_results(collection, query: str, limit: int, session_id: str) -> list[dict]:
-    rows = collection.get(where=_where_rag_scope(session_id), include=["documents", "metadatas"])
+def _keyword_results(query: str, limit: int, session_id: str) -> list[dict]:
+    rows = db.list_keyword_chunks_for_scope(session_id, SEED_SESSION_ID)
     query_terms = _tokens(query)
-    documents = rows.get("documents", [])
+    documents = [row["text"] for row in rows]
     if not query_terms or not documents:
         return []
     tokenized_documents = [_tokens(document) for document in documents]
     bm25 = BM25Okapi(tokenized_documents)
     scores = bm25.get_scores(query_terms)
     scored: list[dict] = []
-    for doc_id, doc, metadata, score in zip(
-        rows.get("ids", []),
+    for row, doc, score in zip(
+        rows,
         documents,
-        rows.get("metadatas", []),
         scores,
         strict=False,
     ):
         if score > 0:
             scored.append(
                 {
-                    "id": doc_id,
+                    "id": row["id"],
                     "document": doc,
-                    "metadata": metadata,
+                    "metadata": {
+                        "document": row["document"],
+                        "page": row["page"],
+                        "parent": row["parent"],
+                        "chunk": row["chunk"],
+                        "parent_text": row["parent_text"],
+                        "session_id": row["session_id"],
+                        "source_type": row["source_type"],
+                    },
                     "keyword_score": score,
                 }
             )
@@ -365,10 +387,24 @@ def _retrieval_signals(query: str, rows: list[dict]) -> RetrievalSignals:
 
 async def retrieve(message: str, session_id: str, top_k: int | None = None) -> tuple[list[str], list[Source], RetrievalSignals]:
     settings = get_settings()
-    collection = _collection()
-    session_rows = collection.get(where=_where_rag_scope(session_id))
-    session_count = len(session_rows.get("ids", []))
-    if session_count == 0:
+    top_k = top_k or settings.rag_top_k
+    retrieval_query = preprocess_query(message)
+    base_candidate_limit = max(top_k * 4, 10)
+    keyword_rows = _keyword_results(retrieval_query, base_candidate_limit, session_id)
+    semantic_rows: list[dict] = []
+
+    try:
+        collection = _collection()
+        session_rows = collection.get(where=_where_rag_scope(session_id))
+        session_count = len(session_rows.get("ids", []))
+        if session_count:
+            vector = await embed(retrieval_query)
+            candidate_limit = min(base_candidate_limit, session_count)
+            semantic_rows = _semantic_results(collection, vector, candidate_limit, session_id)
+    except Exception:
+        semantic_rows = []
+
+    if not semantic_rows and not keyword_rows:
         return [], [], RetrievalSignals(
             confidence=0.0,
             max_query_term_coverage=0.0,
@@ -377,13 +413,7 @@ async def retrieve(message: str, session_id: str, top_k: int | None = None) -> t
             result_count=0,
         )
 
-    top_k = top_k or settings.rag_top_k
-    retrieval_query = preprocess_query(message)
-    vector = await embed(retrieval_query)
-    candidate_limit = min(max(top_k * 4, 10), session_count)
-    semantic_rows = _semantic_results(collection, vector, candidate_limit, session_id)
-    keyword_rows = _keyword_results(collection, retrieval_query, candidate_limit, session_id)
-    fused_rows = _merge_with_rrf(semantic_rows, keyword_rows, min(candidate_limit, 10))
+    fused_rows = _merge_with_rrf(semantic_rows, keyword_rows, min(base_candidate_limit, 10))
     final_rows = _rerank(retrieval_query, fused_rows, top_k)
 
     contexts: list[str] = []

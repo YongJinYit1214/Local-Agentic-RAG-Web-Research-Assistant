@@ -17,6 +17,8 @@ from app.services.structured_llm import verify_grounded_answer
 from app.vllm_client import VllmUnavailableError, check_vllm, stream_chat
 from app.web_search import web_search
 
+APP_BUILD = "hybrid-keyword-fallback-2026-08-11"
+
 app = FastAPI(title="EvidenceDocs API")
 
 app.add_middleware(
@@ -42,7 +44,7 @@ def sse(event: str, data) -> str:
 
 @app.get("/health")
 def health() -> dict[str, str]:
-    return {"status": "ok"}
+    return {"status": "ok", "build": APP_BUILD}
 
 
 @app.get("/health/vllm")
@@ -119,7 +121,6 @@ async def chat_stream(payload: ChatStreamRequest):
                 rag_sources = []
                 route_state = choose_route_with_graph(payload.message, payload.web_search_mode, 0, 0, 0)
             else:
-                await ensure_seed_documents(payload.session_id)
                 yield sse("status", {"message": "Searching documents..."})
                 contexts, rag_sources, retrieval_signals = await retrieve(payload.message, payload.session_id)
                 route_state = choose_route_with_graph(

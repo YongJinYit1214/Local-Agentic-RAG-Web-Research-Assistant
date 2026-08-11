@@ -58,6 +58,30 @@ async def check_vllm() -> dict:
         }
 
 
+async def check_embedding_server() -> dict:
+    settings = get_settings()
+    result = {
+        "status": "ok",
+        "base_url": settings.vllm_embed_base_url,
+        "model": settings.vllm_embed_model,
+        "model_available": False,
+        "models": [],
+    }
+    try:
+        models = await _models(settings.vllm_embed_base_url)
+        return {
+            **result,
+            "models": models,
+            "model_available": settings.vllm_embed_model in models,
+        }
+    except httpx.HTTPError as exc:
+        return {
+            **result,
+            "status": "offline",
+            "message": str(exc),
+        }
+
+
 async def stream_chat(messages: list[dict[str, str]]) -> AsyncIterator[str]:
     settings = get_settings()
     payload = {

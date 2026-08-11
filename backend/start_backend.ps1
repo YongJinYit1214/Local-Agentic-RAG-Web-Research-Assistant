@@ -1,6 +1,21 @@
 $ErrorActionPreference = "Stop"
 Set-Location $PSScriptRoot
 
+function Stop-PortOwner {
+    param([int]$Port)
+
+    $owners = netstat -ano |
+        Select-String ":$Port\s" |
+        ForEach-Object { ($_ -split "\s+")[-1] } |
+        Where-Object { $_ -match "^\d+$" -and [int]$_ -ne 0 -and [int]$_ -ne $PID } |
+        Select-Object -Unique
+
+    foreach ($owner in $owners) {
+        Write-Host "Stopping existing process $owner on port $Port..."
+        Stop-Process -Id ([int]$owner) -Force -ErrorAction SilentlyContinue
+    }
+}
+
 if (-not (Test-Path ".\.venv\Scripts\python.exe")) {
     python -m venv .venv
 }
@@ -8,8 +23,9 @@ if (-not (Test-Path ".\.venv\Scripts\python.exe")) {
 .\.venv\Scripts\python -m pip install -r requirements.txt
 
 try {
-    Invoke-RestMethod "http://127.0.0.1:8001/v1/models" | Out-Null
-    Invoke-RestMethod "http://127.0.0.1:8002/v1/models" | Out-Null
+    $headers = @{ Authorization = "Bearer token-local" }
+    Invoke-RestMethod "http://127.0.0.1:8001/v1/models" -Headers $headers | Out-Null
+    Invoke-RestMethod "http://127.0.0.1:8002/v1/models" -Headers $headers | Out-Null
 }
 catch {
     Write-Host ""
@@ -20,4 +36,5 @@ catch {
     Write-Host ""
 }
 
+Stop-PortOwner 8011
 .\.venv\Scripts\python -m uvicorn app.main:app --host 127.0.0.1 --port 8011

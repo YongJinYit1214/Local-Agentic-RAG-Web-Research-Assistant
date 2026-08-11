@@ -11,7 +11,7 @@ The goal is to demonstrate a full-stack AI assistant that answers only from seed
 - Session-based chat memory stored in SQLite.
 - Session-scoped uploaded documents.
 - Seed PDF pack for repeatable demos.
-- Hybrid RAG retrieval over uploaded documents.
+- Hybrid RAG retrieval over seeded PDFs and uploaded documents.
 - Tavily web search for online/current information.
 - Deterministic LangGraph routing instead of letting the LLM randomly choose tools.
 - Structured JSON groundedness verification with Pydantic validation.
@@ -28,6 +28,7 @@ The goal is to demonstrate a full-stack AI assistant that answers only from seed
 | Chat model | `Qwen/Qwen3-4B-Instruct-2507-FP8` |
 | Embedding model | `BAAI/bge-small-en-v1.5` via vLLM `/v1/embeddings` |
 | Vector DB | ChromaDB |
+| Keyword index | SQLite `keyword_chunks` table + BM25 |
 | Chat DB | SQLite |
 | Web Search | Tavily |
 | Agent Routing | LangGraph |
@@ -47,7 +48,7 @@ FastAPI /chat/stream
   |
   +--> Hybrid RAG retrieval over shared seed PDFs + current-session uploads
   |       semantic search: ChromaDB + vLLM embeddings
-  |       keyword search: BM25 with IDF
+  |       keyword search: SQLite keyword chunk index + BM25 with IDF
   |       merge: Reciprocal Rank Fusion
   |       rerank: relevance scoring
   |       confidence: RRF + rerank + coverage + diversity
@@ -113,6 +114,9 @@ Behavior:
   - `document`
   - `page`
   - `chunk`
+- Each chunk is written to both retrieval indexes:
+  - ChromaDB for semantic vector similarity
+  - SQLite `keyword_chunks` for BM25 keyword retrieval
 - RAG retrieval searches uploaded documents for the active `session_id` plus the shared seed corpus stored under `session_id="__seed__"`.
 - `GET /documents?session_id=...` only lists files for that chat.
 - `DELETE /documents/{document_name}?session_id=...` deletes that file only for that chat.
@@ -139,19 +143,24 @@ Current seed PDFs:
 
 The current demo seed pack contains memory-management lecture PDFs plus an AI internship requirements PDF.
 
-Seed PDFs are not indexed per chat. They are manually pre-indexed once into ChromaDB under the shared seed namespace:
+Seed PDFs are not indexed per chat. They are manually pre-indexed once into the shared retrieval indexes under the seed namespace:
 
 ```text
 session_id="__seed__"
 source_type="seed"
 ```
 
+Pre-indexing writes the same chunks into:
+
+- ChromaDB, for semantic vector search.
+- SQLite `keyword_chunks`, for BM25 keyword search.
+
 Every chat can retrieve from this shared seed corpus, but the frontend does not show seed PDFs in the uploaded document strip. The strip is reserved for user-uploaded files only.
 
 This gives a predictable demo:
 
 ```text
-Pre-index seed PDFs once
+Pre-index seed PDFs once into ChromaDB + SQLite BM25 index
   |
   v
 New chat
@@ -224,6 +233,8 @@ backend/seeds/pdfs/hr_benefits_handbook.pdf
 cd backend
 .\.venv\Scripts\python.exe -m app.preindex_seeds --reset
 ```
+
+The pre-index command calls the embedding server because PDFs must be converted into vectors before they can be stored in ChromaDB. If `http://localhost:8002/v1` is not running with `BAAI/bge-small-en-v1.5`, the command stops before modifying the index and tells you to start the embedding server first.
 
 5. Restart the backend and frontend.
 
@@ -309,6 +320,15 @@ semantic search + keyword search + rank fusion
 
 It does not mean "RAG plus web search." RAG plus web search is handled by the separate `RAG_WEB` route.
 
+EvidenceDocs does not use two vector databases. It uses two different retrieval indexes over the same chunks:
+
+| Index | Storage | Purpose |
+| --- | --- | --- |
+| Semantic index | ChromaDB | Finds chunks by embedding similarity and meaning |
+| Keyword index | SQLite `keyword_chunks` table | Feeds BM25 exact-term search |
+
+Both indexes store the same chunk IDs. This lets the backend merge semantic and keyword results reliably without guessing whether two results refer to the same source text.
+
 ### Step 1: Chunk Documents
 
 Uploaded PDFs, TXT, and Markdown files are extracted into text, cleaned, and split using a parent-child chunking strategy.
@@ -323,16 +343,26 @@ child overlap: 80 tokens/words
 
 Retrieval searches child chunks because smaller chunks improve precision. Generation receives the larger parent chunk stored in metadata because parent context gives the LLM enough surrounding information to answer completely.
 
-Each child chunk is stored in ChromaDB with metadata:
+Each child chunk is stored in two places:
+
+1. ChromaDB, with the embedding vector and metadata.
+2. SQLite `keyword_chunks`, with raw chunk text and metadata for BM25.
+
+Both rows use the same generated `chunk_id`.
+
+Chunk metadata:
 
 ```text
 session_id
+source_type
 document
 page
 parent
 chunk
 parent_text
 ```
+
+This means upload indexing and seed pre-indexing follow the same method. There is no special hidden retrieval path for seeds.
 
 ### Step 2: Semantic Search
 
@@ -342,7 +372,10 @@ The user query is embedded using the vLLM embedding server:
 BAAI/bge-small-en-v1.5
 ```
 
-Then ChromaDB performs vector similarity search over chunks for the current session.
+Then ChromaDB performs vector similarity search over:
+
+- the shared seed namespace: `session_id="__seed__"`
+- the current chat upload namespace: `session_id=<active_session_id>`
 
 Semantic search is useful because it can match meaning even when the exact words differ.
 
@@ -361,7 +394,12 @@ Semantic search may find chunks about:
 
 ### Step 3: Keyword Search
 
-EvidenceDocs also performs BM25 keyword retrieval over the same session-scoped chunks.
+EvidenceDocs also performs BM25 keyword retrieval over the SQLite `keyword_chunks` table.
+
+The keyword search scope is the same as semantic search:
+
+- shared seed chunks
+- uploaded chunks for the active chat only
 
 BM25 uses term frequency and inverse document frequency, so rare important terms are rewarded more strongly than common words.
 
@@ -869,12 +907,12 @@ Recommended Windows startup:
 powershell -ExecutionPolicy Bypass -File .\backend\start_vllm_windows.ps1
 ```
 
-This opens two persistent WSL PowerShell windows:
+This runs the shared WSL vLLM launcher in the current terminal:
 
-- one for `Qwen/Qwen3-4B-Instruct-2507-FP8` chat on port `8001`
-- one for `BAAI/bge-small-en-v1.5` embeddings on port `8002`
+- `Qwen/Qwen3-4B-Instruct-2507-FP8` chat on port `8001`
+- `BAAI/bge-small-en-v1.5` embeddings on port `8002`
 
-Keep both windows open while using EvidenceDocs.
+Keep this terminal open while using EvidenceDocs.
 
 Alternative manual WSL startup:
 
@@ -899,8 +937,9 @@ The embedding model remains `BAAI/bge-small-en-v1.5`. In this local vLLM install
 Check vLLM:
 
 ```powershell
-Invoke-RestMethod http://127.0.0.1:8001/v1/models
-Invoke-RestMethod http://127.0.0.1:8002/v1/models
+$headers = @{ Authorization = "Bearer token-local" }
+Invoke-RestMethod http://127.0.0.1:8001/v1/models -Headers $headers
+Invoke-RestMethod http://127.0.0.1:8002/v1/models -Headers $headers
 ```
 
 ### 2. Configure Backend Environment
@@ -924,7 +963,7 @@ BRAVE_API_KEY=
 
 ### 3. Pre-Index Seed PDFs
 
-Before starting the app for a demo, index the seed PDFs once into ChromaDB.
+Before starting the app for a demo, index the seed PDFs once into ChromaDB and the SQLite BM25 keyword index.
 
 The vLLM embedding server on port `8002` must be running first because this command creates embeddings.
 
@@ -941,6 +980,7 @@ What this does:
 - chunks each PDF
 - creates embeddings with `BAAI/bge-small-en-v1.5`
 - stores chunks in ChromaDB under `session_id="__seed__"`
+- stores the same chunks in SQLite `keyword_chunks` for BM25
 - skips repeated per-chat seed indexing
 
 Use `--reset` when seed PDFs changed. Without `--reset`, already-indexed seed PDFs are skipped.
@@ -952,6 +992,14 @@ From project root:
 ```powershell
 powershell -ExecutionPolicy Bypass -File .\start_evidencedocs.ps1
 ```
+
+This opens three terminals:
+
+- `EvidenceDocs vLLM`
+- `EvidenceDocs Backend`
+- `EvidenceDocs Frontend`
+
+If you changed backend code, stop the old backend terminal and start again. The backend intentionally does not use auto-reload, so a stale terminal can keep running old code.
 
 Frontend:
 
@@ -1000,6 +1048,21 @@ Check:
 ```text
 http://localhost:8011/health
 ```
+
+The response should include the current backend build label. If it does not, the browser is still talking to an old backend process.
+
+### Chat shows an old internal error after code changes
+
+Stop the old backend terminal and start it again:
+
+```powershell
+cd backend
+.\.venv\Scripts\python.exe -m uvicorn app.main:app --host 127.0.0.1 --port 8011
+```
+
+EvidenceDocs runs FastAPI without auto-reload so it stays stable during demos. That also means code changes are not picked up until the backend is restarted.
+
+The backend startup script now stops any existing process on port `8011` before starting Uvicorn, which prevents stale FastAPI processes from keeping old code alive.
 
 ### Backend says "vLLM chat server is not reachable" or "vLLM embedding server is not reachable"
 
