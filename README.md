@@ -45,7 +45,7 @@ FastAPI /chat/stream
   |
   +--> SQLite memory: save/load messages
   |
-  +--> Hybrid RAG retrieval for current session
+  +--> Hybrid RAG retrieval over shared seed PDFs + current-session uploads
   |       semantic search: ChromaDB + vLLM embeddings
   |       keyword search: BM25 with IDF
   |       merge: Reciprocal Rank Fusion
@@ -78,7 +78,9 @@ Frontend sends:
 Backend saves user message
   |
   v
-Hybrid RAG checks uploaded docs for this session only
+Hybrid RAG checks:
+  - pre-indexed shared seed PDFs
+  - uploaded docs for this session only
   |
   v
 Router decides route
@@ -111,7 +113,7 @@ Behavior:
   - `document`
   - `page`
   - `chunk`
-- RAG retrieval filters ChromaDB by the active `session_id`.
+- RAG retrieval searches uploaded documents for the active `session_id` plus the shared seed corpus stored under `session_id="__seed__"`.
 - `GET /documents?session_id=...` only lists files for that chat.
 - `DELETE /documents/{document_name}?session_id=...` deletes that file only for that chat.
 - `DELETE /documents?session_id=...` clears documents for that chat.
@@ -127,17 +129,31 @@ backend/seeds/pdfs
 
 Current seed PDFs:
 
+- `101 Memory.pdf`
+- `102 The Memory Hierarchy.pdf`
+- `103 Virtual Memory.pdf`
+- `104 Memory Management - Partitioning.pdf`
+- `105 Memory Management - Paging.pdf`
+- `106 Memory Management - Segmentation.pdf`
 - `ai_internship_requirements.pdf`
-- `hybrid_rag_design_notes.pdf`
-- `evaluation_rubric.pdf`
 
-Each seed PDF has three pages of related content about AI internship requirements, hybrid RAG design, deterministic routing, grounded answering, and evaluation metrics.
+The current demo seed pack contains memory-management lecture PDFs plus an AI internship requirements PDF.
 
-The backend automatically loads these PDFs into each active chat session. They are available to RAG, but the frontend does not show them in the uploaded document strip. The strip is reserved for user-uploaded files only.
+Seed PDFs are not indexed per chat. They are manually pre-indexed once into ChromaDB under the shared seed namespace:
+
+```text
+session_id="__seed__"
+source_type="seed"
+```
+
+Every chat can retrieve from this shared seed corpus, but the frontend does not show seed PDFs in the uploaded document strip. The strip is reserved for user-uploaded files only.
 
 This gives a predictable demo:
 
 ```text
+Pre-index seed PDFs once
+  |
+  v
 New chat
   |
   v
@@ -200,17 +216,22 @@ backend/seeds/pdfs/product_api_manual.pdf
 backend/seeds/pdfs/hr_benefits_handbook.pdf
 ```
 
-3. Restart the backend.
+3. Start the vLLM embedding server.
 
-4. Start a new chat.
+4. Rebuild the shared seed index:
 
-5. EvidenceDocs automatically indexes the new company seed PDFs for that chat session.
+```powershell
+cd backend
+.\.venv\Scripts\python.exe -m app.preindex_seeds --reset
+```
+
+5. Restart the backend and frontend.
 
 No frontend code change is required.
 
 ### Important Behavior
 
-Seed PDFs are automatically available to RAG, but they are hidden from the visible uploaded-document strip in the UI.
+Seed PDFs are available to RAG after pre-indexing, but they are hidden from the visible uploaded-document strip in the UI.
 
 Reason:
 
@@ -220,9 +241,7 @@ Reason:
 
 ### Updating Seed PDFs
 
-If a company changes a seed PDF, restart the backend and start a new chat so the new session indexes the latest version.
-
-For existing sessions, clear documents or delete the old session if you want to force a fresh index.
+If a company changes a seed PDF, rebuild the shared seed index.
 
 Recommended operational workflow:
 
@@ -230,13 +249,16 @@ Recommended operational workflow:
 Update PDFs in backend/seeds/pdfs
   |
   v
-Restart backend
+Start vLLM embedding server
   |
   v
-Start a new chat
+Run python -m app.preindex_seeds --reset
   |
   v
-Seeds are indexed automatically
+Restart backend/frontend
+  |
+  v
+All chats retrieve the updated shared seeds
 ```
 
 ### Governance Model
@@ -769,14 +791,14 @@ Supported file types:
 
 ### `POST /documents/seed`
 
-Ensures the built-in seed PDF pack is loaded into the active chat session. The app normally calls this automatically through `GET /documents?session_id=...` and `/chat/stream`, so this endpoint is mostly useful for testing.
+Indexes the built-in seed PDF pack into the shared seed namespace. The recommended approach is the terminal command below, but this endpoint is available for testing/admin use.
 
 Seed PDFs are hidden from the normal `GET /documents?session_id=...` response because that response is used by the frontend uploaded-document strip.
 
 Form fields:
 
 ```text
-session_id
+reset
 ```
 
 Returns:
@@ -785,7 +807,8 @@ Returns:
 {
   "documents": [
     {
-      "filename": "ai_internship_requirements.pdf",
+      "filename": "101 Memory.pdf",
+      "status": "indexed",
       "chunks": 3
     }
   ]
@@ -899,7 +922,30 @@ TAVILY_API_KEY=your_tavily_key
 BRAVE_API_KEY=
 ```
 
-### 3. Start Everything
+### 3. Pre-Index Seed PDFs
+
+Before starting the app for a demo, index the seed PDFs once into ChromaDB.
+
+The vLLM embedding server on port `8002` must be running first because this command creates embeddings.
+
+From the backend folder:
+
+```powershell
+cd backend
+.\.venv\Scripts\python.exe -m app.preindex_seeds --reset
+```
+
+What this does:
+
+- reads PDFs from `backend/seeds/pdfs`
+- chunks each PDF
+- creates embeddings with `BAAI/bge-small-en-v1.5`
+- stores chunks in ChromaDB under `session_id="__seed__"`
+- skips repeated per-chat seed indexing
+
+Use `--reset` when seed PDFs changed. Without `--reset`, already-indexed seed PDFs are skipped.
+
+### 4. Start Everything
 
 From project root:
 

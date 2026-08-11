@@ -9,7 +9,8 @@ from fastapi.responses import StreamingResponse
 from app import db
 from app.db import delete_session, get_messages, list_sessions, save_message
 from app.prompts import build_messages
-from app.rag import clear_documents, clear_legacy_documents, delete_document, has_document, ingest_document, list_indexed_documents, retrieve
+from app.preindex_seeds import preindex_seed_documents
+from app.rag import clear_documents, clear_legacy_documents, delete_document, ingest_document, list_indexed_documents, retrieve
 from app.agent_graph import choose_route_with_graph
 from app.schemas import ChatStreamRequest
 from app.services.structured_llm import verify_grounded_answer
@@ -37,23 +38,6 @@ def startup() -> None:
 
 def sse(event: str, data) -> str:
     return f"event: {event}\ndata: {json.dumps(data, ensure_ascii=False)}\n\n"
-
-
-async def ensure_seed_documents(session_id: str) -> list[dict]:
-    seed_dir = Path("./seeds/pdfs")
-    loaded: list[dict] = []
-    if not seed_dir.exists():
-        return loaded
-
-    upload_dir = Path("./data/uploads") / session_id
-    upload_dir.mkdir(parents=True, exist_ok=True)
-
-    for seed_path in sorted(seed_dir.glob("*.pdf")):
-        if has_document(seed_path.name, session_id):
-            continue
-        chunks = await ingest_document(seed_path, session_id, source_type="seed")
-        loaded.append({"filename": seed_path.name, "chunks": chunks})
-    return loaded
 
 
 @app.get("/health")
@@ -84,8 +68,6 @@ def remove_session(session_id: str):
 
 @app.get("/documents")
 async def documents(session_id: str | None = Query(default=None)):
-    if session_id:
-        await ensure_seed_documents(session_id)
     return list_indexed_documents(session_id)
 
 
@@ -118,8 +100,8 @@ async def upload_document(session_id: str = Form(...), file: UploadFile = File(.
 
 
 @app.post("/documents/seed")
-async def load_seed_documents(session_id: str = Form(...)):
-    loaded = await ensure_seed_documents(session_id)
+async def load_seed_documents(reset: bool = Form(default=False)):
+    loaded = await preindex_seed_documents(Path("./seeds/pdfs"), reset=reset)
     return {"documents": loaded}
 
 

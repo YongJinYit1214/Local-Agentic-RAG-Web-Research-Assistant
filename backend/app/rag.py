@@ -14,6 +14,7 @@ from app.schemas import Source
 
 
 COLLECTION_NAME = "evidencedocs_vllm_bge_documents"
+SEED_SESSION_ID = "__seed__"
 RRF_K = 60
 PARENT_CHUNK_TOKENS = 1200
 CHILD_CHUNK_TOKENS = 420
@@ -128,6 +129,10 @@ def _where_session(session_id: str | None):
     return {"session_id": session_id} if session_id else None
 
 
+def _where_rag_scope(session_id: str):
+    return {"$or": [{"session_id": session_id}, {"session_id": SEED_SESSION_ID}]}
+
+
 def list_indexed_documents(session_id: str | None = None) -> list[dict]:
     collection = _collection()
     if collection.count() == 0:
@@ -148,6 +153,10 @@ def has_document(document_name: str, session_id: str) -> bool:
         return False
     rows = collection.get(where={"$and": [{"document": document_name}, {"session_id": session_id}]})
     return bool(rows.get("ids", []))
+
+
+def has_seed_document(document_name: str) -> bool:
+    return has_document(document_name, SEED_SESSION_ID)
 
 
 def delete_document(document_name: str, session_id: str | None = None) -> int:
@@ -204,7 +213,7 @@ def _semantic_results(collection, query_vector: list[float], limit: int, session
     results = collection.query(
         query_embeddings=[query_vector],
         n_results=limit,
-        where={"session_id": session_id},
+        where=_where_rag_scope(session_id),
         include=["documents", "metadatas", "distances"],
     )
     rows: list[dict] = []
@@ -245,7 +254,7 @@ def preprocess_query(query: str) -> str:
 
 
 def _keyword_results(collection, query: str, limit: int, session_id: str) -> list[dict]:
-    rows = collection.get(where={"session_id": session_id}, include=["documents", "metadatas"])
+    rows = collection.get(where=_where_rag_scope(session_id), include=["documents", "metadatas"])
     query_terms = _tokens(query)
     documents = rows.get("documents", [])
     if not query_terms or not documents:
@@ -357,7 +366,7 @@ def _retrieval_signals(query: str, rows: list[dict]) -> RetrievalSignals:
 async def retrieve(message: str, session_id: str, top_k: int | None = None) -> tuple[list[str], list[Source], RetrievalSignals]:
     settings = get_settings()
     collection = _collection()
-    session_rows = collection.get(where={"session_id": session_id})
+    session_rows = collection.get(where=_where_rag_scope(session_id))
     session_count = len(session_rows.get("ids", []))
     if session_count == 0:
         return [], [], RetrievalSignals(
