@@ -141,7 +141,6 @@ async def chat_json(messages: list[dict[str, str]], schema: dict) -> str:
         "temperature": 0,
         "max_tokens": 256,
         "guided_json": schema,
-        "response_format": {"type": "json_object"},
     }
     async with httpx.AsyncClient(timeout=90) as client:
         try:

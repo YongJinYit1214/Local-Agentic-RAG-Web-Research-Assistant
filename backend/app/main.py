@@ -249,7 +249,6 @@ async def chat_stream(payload: ChatStreamRequest):
                 answer=assistant_text,
                 context=context,
                 sources=sources,
-                memory_context=memory_text,
             )
             yield sse("verification", {"verification": verification.model_dump()})
 

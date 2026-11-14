@@ -1,13 +1,15 @@
 from app.schemas import Source
 
 
-MAX_CONTEXT_CHARS = 1200
+MAX_CONTEXT_CHARS = 9000
+MAX_SOURCE_CHARS = 3000
 MAX_HISTORY_CHARS = 300
 
 
 SYSTEM_PROMPT = """You are EvidenceDocs, a seeded PDF research assistant.
 Answer clearly and cite provided sources when they are available.
 If the provided document context does not answer the question, say so instead of inventing details.
+When a guarantee or policy is not mentioned, say it is not specified; do not claim it does not exist.
 When Web Search is not active, answer only from uploaded or seeded PDF/document context.
 Memory context may help interpret follow-up wording, but memory is not factual evidence.
 For web results, summarize only what the search snippets support and include links in sources.
@@ -35,7 +37,14 @@ def build_messages(
             for i, source in enumerate(sources, start=1)
         )
 
-    context_text = "\n\n".join(context) if isinstance(context, list) else context or ""
+    if isinstance(context, list):
+        context_text = "\n\n".join(
+            f"[{index}] {sources[index - 1].title if sources and index <= len(sources) else 'Context'}:\n"
+            f"{_trim(item, MAX_SOURCE_CHARS)}"
+            for index, item in enumerate(context, start=1)
+        )
+    else:
+        context_text = context or ""
     context_text = _trim(context_text, MAX_CONTEXT_CHARS)
     route_instruction = {
         "CHAT": "Do not answer from general knowledge. Say the PDFs do not contain enough evidence.",
